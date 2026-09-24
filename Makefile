@@ -17,7 +17,17 @@ run: build/goose
 export: build/goose
 	./build/goose --export out/goose.mp4 --web
 
-app: build/goose
+# release build for GOOSE.app: universal (Apple Silicon + Intel), macOS 12+, against our own SDL3 build
+SDL_REL = build/sdl3
+$(SDL_REL)/lib/libSDL3.0.dylib:
+	sh tools/build_sdl.sh
+
+build/goose-release: $(SRC) src/*.h $(SDL_REL)/lib/libSDL3.0.dylib
+	$(CXX) -std=c++17 -O2 -Wall -Wno-deprecated-declarations -DGL_SILENCE_DEPRECATION -arch arm64 -arch x86_64 \
+	  -mmacosx-version-min=12.0 -I$(SDL_REL)/include $(SRC) -o $@.new -L$(SDL_REL)/lib -lSDL3 -framework OpenGL \
+	  -Wl,-rpath,@executable_path/../Frameworks && mv $@.new $@
+
+app: build/goose-release
 	sh tools/make_app.sh
 
 zip: app

@@ -5,18 +5,13 @@ cd "$(dirname "$0")/.."
 APP=build/GOOSE.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/assets/gen" "$APP/Contents/Frameworks"
-cp build/goose "$APP/Contents/MacOS/goose"
+cp build/goose-release "$APP/Contents/MacOS/goose"
 cp tools/Info.plist "$APP/Contents/Info.plist"
 cp -R shaders "$APP/Contents/Resources/shaders"
 cp assets/gen/*.png "$APP/Contents/Resources/assets/gen/"
 cp assets/OLDSCHOOL-PC-FONTS-LICENSE.TXT LICENSE README.md "$APP/Contents/Resources/"
-# SDL3, re-pointed at the bundle
-SDL=$(otool -L build/goose | awk '/libSDL3/ {print $1}')
-cp "$(readlink -f "$SDL")" "$APP/Contents/Frameworks/libSDL3.0.dylib"
-chmod u+w "$APP/Contents/Frameworks/libSDL3.0.dylib"
-install_name_tool -id @rpath/libSDL3.0.dylib "$APP/Contents/Frameworks/libSDL3.0.dylib"
-install_name_tool -change "$SDL" @rpath/libSDL3.0.dylib "$APP/Contents/MacOS/goose"
-install_name_tool -add_rpath @executable_path/../Frameworks "$APP/Contents/MacOS/goose"
+# SDL3 (universal, macOS 12+, install name @rpath/libSDL3.0.dylib; the binary's rpath points at Frameworks)
+cp build/sdl3/lib/libSDL3.0.dylib "$APP/Contents/Frameworks/libSDL3.0.dylib"
 # icon from the ESA cube
 ICON=build/goose.iconset
 rm -rf "$ICON"; mkdir -p "$ICON"

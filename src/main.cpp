@@ -13,9 +13,9 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <mutex>
 #include <sstream>
 #include <string>
+#include <csignal>
 #include <sys/stat.h>
 #include <thread>
 #include <vector>
@@ -30,6 +30,10 @@
 #include "third_party/stb_image_write.h"
 
 static bool fileExists(const std::string& p) { struct stat st; return stat(p.c_str(), &st) == 0; }
+static void mkdirs(const std::string& path) {   // mkdir -p
+    for (size_t i = 1; i <= path.size(); i++)
+        if (i == path.size() || path[i] == '/') mkdir(path.substr(0, i).c_str(), 0755);
+}
 
 static std::string findResources() {
     const char* base = SDL_GetBasePath();   // .app: Contents/Resources/ ; dev: build/
@@ -89,17 +93,17 @@ struct Export {
 };
 
 // ------------------------------------------------------------------ audio out
+// Shared with the audio callback. SDL3 holds the stream's lock while the callback runs, so the main thread
+// takes that same (recursive) lock via SDL_LockAudioStream before touching this: one lock, no ordering issues.
 struct AudioOut {
     const std::vector<float>* mix = nullptr;
     std::atomic<long> pos{0};
     std::atomic<bool> playing{false};
-    std::mutex m;
 };
 static void SDLCALL audioCb(void* ud, SDL_AudioStream* s, int additional, int) {
     AudioOut* a = (AudioOut*)ud;
     int frames = additional / 8;
     std::vector<float> buf(frames * 2, 0.0f);
-    std::lock_guard<std::mutex> lk(a->m);
     if (a->playing && a->mix) {
         long p = a->pos;
         for (int i = 0; i < frames; i++, p++)
@@ -111,8 +115,9 @@ static void SDLCALL audioCb(void* ud, SDL_AudioStream* s, int additional, int) {
 
 // ------------------------------------------------------------------ main
 int main(int argc, char** argv) {
+    signal(SIGPIPE, SIG_IGN);   // a dying ffmpeg must surface as a write error, not kill GOOSE
     std::string exportPath, framesArg, framesPrefix, partId, wavPath, menuShot, menuKeys;
-    bool web = false, defaults = false, list = false, isoTest = false;
+    bool web = false, defaults = false, list = false, isoTest = false, autotest = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--export") && i + 1 < argc) exportPath = argv[++i];
         else if (!strcmp(argv[i], "--frames") && i + 2 < argc) { framesArg = argv[++i]; framesPrefix = argv[++i]; }
@@ -120,6 +125,7 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--web")) web = true;
         else if (!strcmp(argv[i], "--defaults")) defaults = true;
         else if (!strcmp(argv[i], "--list")) list = true;
+        else if (!strcmp(argv[i], "--autotest")) autotest = true;
         else if (!strcmp(argv[i], "--isolation-test")) isoTest = true;
         else if (!strcmp(argv[i], "--download-song")) {   // test the first-run download path
             std::string e;
@@ -298,29 +304,29 @@ int main(int argc, char** argv) {
     auto start = std::chrono::steady_clock::now();
     auto clock = [&]() { return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(); };
 
+    auto withAudio = [&](auto f) { if (as) SDL_LockAudioStream(as); f(); if (as) SDL_UnlockAudioStream(as); };
     auto rebuild = [&]() {
         tl = S.timeline(R.parts);
         ms.tl = tl;
-        std::lock_guard<std::mutex> lk(ao.m);
-        st.build(tl, song);
-        ao.mix = &st.mix;
+        withAudio([&] { st.build(tl, song); ao.mix = &st.mix; });
         dirty = false;
     };
     auto play = [&](double from) {
         if (dirty) rebuild();
         R.resetDemoHistory();
-        std::lock_guard<std::mutex> lk(ao.m);
-        ao.pos = (long)(from * SR);
-        if (as) SDL_ClearAudioStream(as);
-        ao.playing = true;
+        withAudio([&] {
+            ao.pos = (long)(from * SR);
+            if (as) SDL_ClearAudioStream(as);
+            ao.playing = true;
+        });
         paused = false;
         mode = PLAY;
     };
-    auto stopPlay = [&]() { std::lock_guard<std::mutex> lk(ao.m); ao.playing = false; mode = MENU; };
+    auto stopPlay = [&]() { withAudio([&] { ao.playing = false; }); mode = MENU; };
     auto startExport = [&]() {
         if (ms.ffmpeg.empty()) { ms.message = "ffmpeg not found: brew install ffmpeg"; return; }
         if (dirty) rebuild();
-        mkdir(S.outDir.c_str(), 0755);
+        mkdirs(S.outDir);
         char name[64]; time_t now = time(nullptr);
         strftime(name, sizeof name, "goose-%Y%m%d-%H%M%S.mp4", localtime(&now));
         std::string out = S.outDir + "/" + name;
@@ -332,20 +338,39 @@ int main(int argc, char** argv) {
         mode = EXPORTING;
     };
 
+    // --autotest drives the real loop with synthetic keys: play, seek, back to the menu, export, quit
+    double autoT0 = clock(), autoPlayT = 0, tRender = 0, tOut = 0, tUi = 0;
+    int autoStep = 0;
     while (run) {
+        if (autotest) {
+            double at = clock() - autoT0;
+            auto push = [&](SDL_Keycode k) {
+                SDL_Event ev{}; ev.type = SDL_EVENT_KEY_DOWN; ev.key.key = k; ev.key.down = true; SDL_PushEvent(&ev);
+            };
+            long queued = as ? SDL_GetAudioStreamQueued(as) / 8 : 0;
+            double pt = (ao.pos - queued) / (double)SR;
+            if (autoStep == 0 && at > 0.5) { push(SDLK_F5); autoStep++; }
+            else if (autoStep == 1 && at > 3.5) { autoPlayT = pt; fprintf(stderr, "autotest: playing, t=%.2f after 3 s\n", pt); push(SDLK_RIGHT); autoStep++; }
+            else if (autoStep == 2 && at > 4.5) { fprintf(stderr, "autotest: after seek +5 s, t=%.2f (was %.2f)\n", pt, autoPlayT); push(SDLK_ESCAPE); autoStep++; }
+            else if (autoStep == 3 && at > 5.0) { fprintf(stderr, "autotest: back in menu=%d\n", mode == MENU); push(SDLK_F9); autoStep++; }
+            else if (autoStep == 4 && at > 5.5 && mode == MENU && !ms.exporting) {
+                fprintf(stderr, "autotest: export finished: %s\n", ms.message.c_str()); run = false;
+            }
+        }
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_EVENT_QUIT) run = false;
             if (mode == PLAY && e.type == SDL_EVENT_KEY_DOWN) {
                 SDL_Keycode k = e.key.key;
                 if (k == SDLK_ESCAPE) stopPlay();
-                else if (k == SDLK_SPACE) { paused = !paused; ao.playing = !paused; }
+                else if (k == SDLK_SPACE) { paused = !paused; withAudio([&] { ao.playing = !paused; }); }
                 else if (k == SDLK_F) { fs = !fs; SDL_SetWindowFullscreen(win, fs); }
                 else if (k == SDLK_LEFT || k == SDLK_RIGHT || k == SDLK_HOME) {
                     long p = k == SDLK_HOME ? 0 : ao.pos + (k == SDLK_LEFT ? -5 : 5) * SR;
-                    std::lock_guard<std::mutex> lk(ao.m);
-                    ao.pos = std::clamp<long>(p, 0, (long)(tl.length * SR));
-                    if (as) SDL_ClearAudioStream(as);
+                    withAudio([&] {
+                        ao.pos = std::clamp<long>(p, 0, (long)(tl.length * SR));
+                        if (as) SDL_ClearAudioStream(as);
+                    });
                     R.resetDemoHistory();
                 }
                 continue;
@@ -380,7 +405,7 @@ int main(int argc, char** argv) {
                     ex.finish(); remove(ex.path.c_str()); ms.exporting = false; mode = MENU; ms.message = "Export cancelled.";
                     break;
                 case MA_QUIT: run = false; break;
-                case MA_OPEN_FOLDER: mkdir(S.outDir.c_str(), 0755); system(("open \"" + S.outDir + "\"").c_str()); break;
+                case MA_OPEN_FOLDER: mkdirs(S.outDir); system(("open \"" + S.outDir + "\"").c_str()); break;
                 case MA_RELOAD: R.loadParts(); S.reconcile(R.parts); dirty = true; tl = S.timeline(R.parts); ms.tl = tl; ms.message = "Parts reloaded."; break;
                 case MA_DOWNLOAD:
                     if (dl == 0 || dl == 3) {
@@ -416,9 +441,16 @@ int main(int argc, char** argv) {
             if (mode == EXPORTING) {   // render a slice of frames per UI frame
                 auto sliceStart = std::chrono::steady_clock::now();
                 while (ex.frame < ex.total && std::chrono::steady_clock::now() - sliceStart < std::chrono::milliseconds(60)) {
+                    auto a0 = std::chrono::steady_clock::now();
                     R.renderDemo(ex.frame / (double)FPS, tl, st, look);
+                    auto a1 = std::chrono::steady_clock::now();
                     if (!ex.frameOut(R.demoFBO())) { ms.message = "export failed (ffmpeg pipe)"; ex.frame = ex.total; break; }
+                    auto a2 = std::chrono::steady_clock::now();
+                    tRender += std::chrono::duration<double>(a1 - a0).count(); tOut += std::chrono::duration<double>(a2 - a1).count();
                     ex.frame++;
+                    if (autotest && ex.frame % 300 == 0)
+                        fprintf(stderr, "autotest: export frame %d  %.1f fps  render %.1f ms  readback+pipe %.1f ms  ui %.1f ms/frame\n", ex.frame,
+                                ex.frame / ex.elapsed(), tRender / ex.frame * 1e3, tOut / ex.frame * 1e3, tUi / ex.frame * 1e3);
                 }
                 ms.exportFrac = ex.frame / (double)std::max(1, ex.total);
                 ms.exportEta = ex.frame ? ex.elapsed() / ex.frame * (ex.total - ex.frame) : 0;
@@ -427,12 +459,14 @@ int main(int argc, char** argv) {
                     remove(exWav.c_str());
                     ms.exporting = false; mode = MENU;
                     ms.message = rc == 0 ? "Saved " + ex.path : "ffmpeg failed (code " + std::to_string(rc) + ")";
-                    if (rc == 0) system(("open -R \"" + ex.path + "\"").c_str());
+                    if (rc == 0 && !autotest) system(("open -R \"" + ex.path + "\"").c_str());
                 }
             }
+            auto u0 = std::chrono::steady_clock::now();
             menu.draw(scr, ms, clock());
             R.renderText(scr, clock(), look);
             showFBO = R.menuFBO();
+            if (mode == EXPORTING) tUi += std::chrono::duration<double>(std::chrono::steady_clock::now() - u0).count();
         }
         int ww, wh; SDL_GetWindowSizeInPixels(win, &ww, &wh);
         double s = std::min(ww / (double)OUT_W, wh / (double)OUT_H);

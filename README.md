@@ -27,8 +27,20 @@ ESA logo.
 
 ## Run it
 
-**The app:** download `GOOSE-macOS.zip` from the releases, unzip it, then right-click `GOOSE.app` and choose **Open** the first
-time (it's ad-hoc signed, not notarised). It opens in **GOOSE SETUP**, a 90s-style setup program shown on the CRT:
+**The app:** download `GOOSE-macOS.zip` from the [releases](https://github.com/Edenal/goose/releases), unzip it and
+move `GOOSE.app` to Applications. It's universal (Apple Silicon and Intel) and needs macOS 12 or newer.
+
+GOOSE is ad-hoc signed, not notarised, so macOS blocks the first launch. Allow it in either of two ways:
+
+- Double-click it once (it gets blocked), then go to **System Settings → Privacy & Security** and click **Open Anyway**
+  next to the GOOSE message.
+- Or run this in Terminal:
+
+  ```
+  xattr -dr com.apple.quarantine /Applications/GOOSE.app
+  ```
+
+It opens in **GOOSE SETUP**, a 90s-style setup program shown on the CRT:
 
 - **Sequences:** switch demo parts on or off with Space, reorder them with Shift+↑↓, and press Enter to preview from
   that part. Boot and finale can be switched off too. The details panel shows what each part is and which classic
@@ -50,7 +62,8 @@ parts you pick, the cube lands on the logo on the song's final hit and every cut
 brew install sdl3 ffmpeg
 make                                   # build/goose
 make run                               # the app
-make app                               # build/GOOSE.app (bundles SDL3); make zip -> build/GOOSE-macOS.zip
+make app                               # build/GOOSE.app: universal, macOS 12+, builds its own SDL3 first
+make zip                               # build/GOOSE-macOS.zip
 ./build/goose --export out/goose.mp4 --web      # render the saved arrangement (--defaults: the factory trailer)
 ./build/goose --frames 23.7,66.4 out/x          # stills
 ./build/goose --list                            # the parts
