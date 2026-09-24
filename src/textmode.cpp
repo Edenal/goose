@@ -72,11 +72,11 @@ static const Typed TY_EAS = {16.20, "eas", 9.0};                       // the ty
 static const Typed TY_REM = {16.85, "rem never happened before", 21.0}; // ...and the runner's excuse
 static const Typed TY_ESA = {18.30, "esa", 10.0};
 constexpr double ENT_CD = 7.95, ENT_SETUP = 8.80, ENT_Y = 6.10, ENT_EAS = 16.62, ENT_REM = 18.15, ENT_ESA = 18.72;
-constexpr double T_GARBAGE = T_DEMO - 0.85;                            // VGA mode switch spews garbage
+constexpr double T_GARBAGE = BOOT_END - 0.85;                            // VGA mode switch spews garbage
 static const double CMOS_KEYS[] = {4.40, 4.62, 4.82, 5.02, 5.22, 5.50};   // right, down x4, enter
 static const double CARD_KEYS[] = {9.45, 9.62, 9.79, 9.96, 10.13, 10.55}; // down x5, enter
 static const double SB_KEYS[] = {11.15, 11.42, 11.70, 11.95, 12.20, 12.50}; // down, value, down, down, down, tab
-constexpr double ENT_TEST = MUSIC_AT;  // Enter on [ Test ] starts the music
+constexpr double ENT_TEST = BOOT_MUSIC_AT;  // Enter on [ Test ] starts the music
 constexpr double T_ASK = 14.70, ENT_YES = 15.30, KEY_ANY = 15.85;
 constexpr double EST = 1.50;  // the sound test's (optimistic) estimate
 static const double LOADER_T[] = {18.88, 19.00, 19.12, 19.26, 19.40, 19.54, 19.68, 19.82, 19.96};
@@ -262,7 +262,7 @@ static void setupTest(Screen& s, double t) {
     s.center(10, "by Machinae Supremacy", AT(LGR, BLK), 12, 67);
     vuBar(s, 12, 16, 46, s.vu[0], "L");
     vuBar(s, 13, 16, 46, s.vu[1], "R");
-    double el = t - MUSIC_AT;
+    double el = t - BOOT_MUSIC_AT;
     char buf[48];
     snprintf(buf, sizeof buf, "%02d:%05.2f", (int)(el / 60), fmod(el, 60.0));
     bool over = el > EST;
@@ -326,7 +326,7 @@ static void dos2(Screen& s, double t) {
     }
 }
 
-bool drawTextMode(Screen& s, double t, float vuL, float vuR) {
+bool drawTextMode(Screen& s, double t, float vuL, float vuR, float glitch) {
     s.vu[0] = vuL; s.vu[1] = vuR;
     s.clear(AT(BLK, LGR));
     if (t < T_POST) return false;
@@ -340,7 +340,7 @@ bool drawTextMode(Screen& s, double t, float vuL, float vuR) {
     else if (t < ENT_TEST) setupSB(s, t);
     else if (t < T_SAVED) setupTest(s, t);
     else if (t < T_DOS2) setupSaved(s, t);
-    else if (t < T_DEMO - 0.55) {
+    else if (t < BOOT_END - 0.55) {
         dos2(s, t);
         if (t >= T_GARBAGE) {  // the mode switch half-happens: VGA memory read as text
             int fr = (int)(t * 60);
@@ -349,7 +349,7 @@ bool drawTextMode(Screen& s, double t, float vuL, float vuR) {
                 double h = sin((r * 80 + c) * 12.9898 + fr * 78.233) * 43758.5453;
                 h -= floor(h);
                 double band = sin(r * 1.7 + fr * 0.9) * 0.5 + 0.5;
-                if (h < p * (0.35 + 0.65 * band)) {
+                if (h < p * (0.35 + 0.65 * band) * glitch) {
                     double h2 = sin((r * 80 + c) * 3.13 + fr * 1.7) * 9631.7; h2 -= floor(h2);
                     s.c[r][c] = {(uint8_t)(h2 * 255), (uint8_t)(h * 1000.0)};
                 }
@@ -361,10 +361,9 @@ bool drawTextMode(Screen& s, double t, float vuL, float vuR) {
     return true;
 }
 
-std::vector<Sfx> buildSfx() {
+std::vector<Sfx> bootSfx() {
     std::vector<Sfx> v;
     auto typed = [&](const Typed& ty) { for (int i = 0; ty.text[i]; i++) v.push_back({charTime(ty, i), SFX_KEY, 0}); };
-    v.push_back({0.0, SFX_POWER_ON, 0});
     v.push_back({T_POST + 1.55, SFX_BEEP, 0.16f});                // POST ok beep after the memory test
     v.push_back({T_POST + 1.85, SFX_HDD, 0.90f});                 // IDE detection
     v.push_back({T_DEL, SFX_KEY, 0});
@@ -394,12 +393,8 @@ std::vector<Sfx> buildSfx() {
     v.push_back({ENT_ESA, SFX_ENTER, 0});
     v.push_back({ENT_ESA + 0.05, SFX_HDD, 1.1f});
     v.push_back({T_GARBAGE, SFX_STATIC, 0.85f});                  // garbage + sync loss hiss
-    v.push_back({T_DEMO - 0.55, SFX_RELAY, 0});                   // monitor re-syncs to mode X
-    v.push_back({T_DEMO, SFX_DEGAUSS_SMALL, 0});                  // the tube settles on the new mode
+    v.push_back({BOOT_END - 0.55, SFX_RELAY, 0});                   // monitor re-syncs to mode X
+    v.push_back({BOOT_END, SFX_DEGAUSS_SMALL, 0});                  // the tube settles on the new mode
     v.push_back({6.35, SFX_STATIC, 0.20f, 0.8f});                  // reboot sync loss
-    for (double c : {T_DROP, T_PLASMA, T_STAGE, T_TUNNEL, T_FINALE})
-        v.push_back({c - 0.07, SFX_STATIC, 0.20f, 0.9f});          // transition static
-    v.push_back({T_OFF - 0.60, SFX_STATIC, 0.62f, 0.8f});           // the signal breaks up before power-off
-    v.push_back({T_OFF, SFX_POWER_OFF, 0});
     return v;
 }

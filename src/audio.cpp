@@ -1,4 +1,4 @@
-// Soundtrack = song excerpt placed at MUSIC_AT + synthesised PC sounds from the intro script.
+// Soundtrack = the song, back-timed by the Timeline, + synthesised PC and CRT sounds.
 #include "audio.h"
 #include "textmode.h"
 #include "timeline.h"
@@ -12,31 +12,6 @@ static uint32_t rngState = 0x12345678u;
 static float frand() {  // deterministic white noise in [-1,1]
     rngState ^= rngState << 13; rngState ^= rngState >> 17; rngState ^= rngState << 5;
     return (rngState & 0xFFFFFF) / float(0x7FFFFF) - 1.0f;
-}
-
-static bool readWav16(const std::string& path, std::vector<float>& out, int& channels) {
-    FILE* f = fopen(path.c_str(), "rb");
-    if (!f) return false;
-    char id[4]; uint32_t sz;
-    fread(id, 1, 4, f); fread(&sz, 4, 1, f); fread(id, 1, 4, f);
-    int bits = 0; channels = 0; uint32_t rate = 0;
-    while (fread(id, 1, 4, f) == 4 && fread(&sz, 4, 1, f) == 1) {
-        if (!memcmp(id, "fmt ", 4)) {
-            uint16_t fmt, ch, ba, bp; uint32_t br;
-            fread(&fmt, 2, 1, f); fread(&ch, 2, 1, f); fread(&rate, 4, 1, f); fread(&br, 4, 1, f);
-            fread(&ba, 2, 1, f); fread(&bp, 2, 1, f);
-            channels = ch; bits = bp;
-            fseek(f, sz - 16, SEEK_CUR);
-        } else if (!memcmp(id, "data", 4)) {
-            std::vector<int16_t> pcm(sz / 2);
-            fread(pcm.data(), 2, pcm.size(), f);
-            out.resize(pcm.size());
-            for (size_t i = 0; i < pcm.size(); i++) out[i] = pcm[i] / 32768.0f;
-            break;
-        } else fseek(f, sz + (sz & 1), SEEK_CUR);
-    }
-    fclose(f);
-    return bits == 16 && rate == SR && !out.empty();
 }
 
 bool Soundtrack::writeWav(const std::string& path) const {
@@ -223,20 +198,31 @@ static void fanBed(Bus& b, double t0, double t1, double fadeFrom) {   // PC fan 
 }
 
 // ---------------------------------------------------------------- build
-bool Soundtrack::build(const std::string& songWav) {
-    const size_t N = (size_t)(LENGTH * SR);
+// song = the decoded MP3 (interleaved stereo); empty = no music yet (preview still works, silently)
+void Soundtrack::build(const Timeline& tl, const std::vector<float>& song) {
+    const size_t N = (size_t)tl.frames * SR / FPS;
     mix.assign(2 * N, 0.0f);
-    std::vector<float> song; int ch = 0;
-    if (!readWav16(songWav, song, ch) || ch != 2) { fprintf(stderr, "cannot read %s\n", songWav.c_str()); return false; }
     std::vector<float> music(2 * N, 0.0f);
-    size_t off = (size_t)lround(MUSIC_AT * SR);
-    for (size_t i = 0; i + off < N && 2 * i + 1 < song.size(); i++) {
-        music[2 * (i + off)] = song[2 * i] * 0.92f;
-        music[2 * (i + off) + 1] = song[2 * i + 1] * 0.92f;
+    size_t at = (size_t)lround(tl.musicAt * SR);
+    long src0 = lround(tl.songStart * SR);
+    double fadeFrom = tl.length - SONG_FADE;
+    for (size_t i = at; i < N; i++) {
+        long s = src0 + (long)(i - at);
+        if (s < 0 || (size_t)(2 * s + 1) >= song.size()) continue;
+        double t = i / (double)SR;
+        float g = 0.92f * (t > fadeFrom ? (float)std::max(0.0, (tl.length - t) / SONG_FADE) : 1.0f);
+        music[2 * i] = song[2 * s] * g;
+        music[2 * i + 1] = song[2 * s + 1] * g;
     }
     Bus b{mix};
     int seed = 0;
-    for (const Sfx& s : buildSfx()) {
+    std::vector<Sfx> sfx;
+    sfx.push_back({0.0, SFX_POWER_ON, 0});
+    if (tl.boot) for (const Sfx& s : bootSfx()) sfx.push_back(s);
+    for (double c : tl.cuts) sfx.push_back({c - 0.07, SFX_STATIC, 0.20f, 0.9f});   // transition static
+    sfx.push_back({tl.off - 0.60, SFX_STATIC, 0.62f, 0.8f});                         // signal breaks up
+    sfx.push_back({tl.off, SFX_POWER_OFF, 0});
+    for (const Sfx& s : sfx) {
         switch (s.kind) {
             case SFX_KEY: keyClick(b, s.t, 0.22f, 190, -0.1f, seed++); break;
             case SFX_ENTER: keyClick(b, s.t, 0.30f, 120, 0.15f, seed++); break;
@@ -249,11 +235,11 @@ bool Soundtrack::build(const std::string& songWav) {
             case SFX_DEGAUSS_SMALL: degaussSmall(b, s.t); break;
         }
     }
-    fanBed(b, 0.05, T_DEMO, MUSIC_AT + 1.0);
+    if (tl.boot) fanBed(b, 0.05, tl.demoStart, tl.musicAt + 1.0);
     // sfx under the music get ducked a little so the music stays on top
     for (size_t i = 0; i < 2 * N; i++) {
         double t = (i / 2) / (double)SR;
-        float duck = t > MUSIC_AT && t < T_OFF ? 0.6f : 1.0f;
+        float duck = t > tl.musicAt && t < tl.off ? 0.6f : 1.0f;
         float x = music[i] + mix[i] * duck;
         // soft-knee limiter: key clicks and the power-off thump can land on the song's peaks
         float ax = fabsf(x);
@@ -262,7 +248,7 @@ bool Soundtrack::build(const std::string& songWav) {
     }
 
     // ---- per-frame envelopes of the music only
-    int F = (int)(LENGTH * FPS);
+    int F = tl.frames;
     low.assign(F, 0); mid.assign(F, 0); high.assign(F, 0); kick.assign(F, 0); vuL.assign(F, 0); vuR.assign(F, 0);
     float lpL = 0, lpM = 0, hpPrev = 0, hpOut = 0;
     const float aL = 1 - expf(-2 * M_PI * 150.f / SR), aM = 1 - expf(-2 * M_PI * 2000.f / SR);
@@ -297,5 +283,6 @@ bool Soundtrack::build(const std::string& songWav) {
         k = std::max(k * 0.86f, std::min(1.0f, d));
         kick[f] = k;
     }
-    return true;
+    kickCum.assign(F + 1, 0.0);
+    for (int f = 0; f < F; f++) kickCum[f + 1] = kickCum[f] + kick[f] / FPS;
 }

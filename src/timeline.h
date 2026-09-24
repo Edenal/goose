@@ -1,42 +1,62 @@
-// Timing + content contract for the ESA trailer. Everything is a pure function of t (seconds).
+// Timing contract. The arrangement (which parts, in which order) comes from Settings; everything else is
+// derived here, so the renderer, the audio and the glitch schedule all read the same numbers.
 #pragma once
-
-// ---- editable trailer copy -------------------------------------------------
-#define EVENT_NAME   "ESA WINTER 2027"
-#define EVENT_LINE2  "ESAMARATHON.COM"
-#define EVENT_LINE3  "TWITCH.TV/ESAMARATHON"
+#include <string>
+#include <vector>
 
 // ---- output ----------------------------------------------------------------
-constexpr int    OUT_W = 1920, OUT_H = 1080, FPS = 60;
-constexpr double LENGTH = 75.0;
-constexpr int    GFX_W = 320, GFX_H = 240;     // VGA mode X
-constexpr int    TXT_W = 720, TXT_H = 400;     // VGA text mode 80x25, 9x16 cells
+constexpr int OUT_W = 1920, OUT_H = 1080, FPS = 60;
+constexpr int GFX_W = 320, GFX_H = 240;     // VGA mode X
+constexpr int TXT_W = 720, TXT_H = 400;     // VGA text mode 80x25, 9x16 cells
 
-// ---- music (mirrors tools/build_assets.py) ---------------------------------
-// Song = Machinae Supremacy - SIDology Episode 1: SID Evolution, 90 BPM.
-// song_cut.wav starts on song bar 102 (4:32.00) and is placed at MUSIC_AT.
-constexpr double BEAT     = 60.0 / 90.0;
-constexpr double BAR      = 4.0 * BEAT;
-constexpr double MUSIC_AT = 13.0;                  // "Test" pressed in SETUP.EXE
-constexpr double T_DEMO   = MUSIC_AT + 3 * BAR;    // 21.000  song bar 105 lift: demo starts
-constexpr double T_DROP   = MUSIC_AT + 4 * BAR;    // 23.667  song bar 106
-constexpr double T_PLASMA = MUSIC_AT + 8 * BAR;    // 34.333
-constexpr double T_STAGE  = MUSIC_AT + 12 * BAR;   // 45.000
-constexpr double T_TUNNEL = MUSIC_AT + 16 * BAR;   // 55.667
-constexpr double T_FINALE = MUSIC_AT + 19 * BAR;   // 63.667
-constexpr double T_HIT    = 3979.0 / FPS;          // 66.3167 = frame 3979, the measured ending hit (66.318)
-constexpr double T_OFF    = 73.30;                 // CRT power-off (bloom surge -> line -> dot)
+// ---- music -----------------------------------------------------------------
+// Machinae Supremacy - SIDology Episode 1: SID Evolution. 90 BPM, bar grid measured from the audio:
+// song bar k starts at SONG_BAR0 + k * BAR, and the song's final hit is bar SONG_HIT_BAR.
+constexpr double BEAT = 60.0 / 90.0;
+constexpr double BAR = 4.0 * BEAT;
+constexpr double SONG_BAR0 = 261.337 - 98 * BAR;   // 0.0037 s
+constexpr int SONG_HIT_BAR = 122;                  // 5:25.3
+constexpr double HIT_EARLY = 0.015;                // the hit's onset lands 15 ms before its bar line
+constexpr double SONG_FADE = 3.0;                  // music fades out over the last seconds of the video
 
-inline double beatAt(double t) { return (t - MUSIC_AT) / BEAT; }
+// ---- the boot sequence (fixed script, see textmode.cpp) --------------------
+constexpr double BOOT_MUSIC_AT = 13.0;             // "Test" pressed in SETUP.EXE
+constexpr int BOOT_MUSIC_BARS = 3;                 // sound test + DOS + loader under the music
+constexpr double BOOT_END = BOOT_MUSIC_AT + BOOT_MUSIC_BARS * BAR;   // 21.0: mode X
+constexpr double NOBOOT_START = 0.9;               // without the boot, the first part starts after power-on
 
-enum Scene { SC_TEXT = 0, SC_TITLE, SC_DROP, SC_PLASMA, SC_STAGE, SC_TUNNEL, SC_FINALE, SC_BLACK };
+// ---- the ending --------------------------------------------------------------
+constexpr int FINALE_LEAD_BARS = 1;                // cube flies in for one bar, lands on the hit
+constexpr int OFF_AFTER_HIT_FRAMES = 419;          // power-off starts ~7 s after the hit
+constexpr int END_AFTER_OFF_FRAMES = 102;          // and the video ends 1.7 s later
+constexpr int OFF_AFTER_LAST_FRAMES = 24;          // without the finale: power-off 0.4 s after the last part
 
-inline Scene sceneAt(double t, double* t0 = nullptr) {
-    struct { double s; Scene sc; } cues[] = {
-        {0, SC_TEXT}, {T_DEMO - 0.55, SC_BLACK}, {T_DEMO, SC_TITLE}, {T_DROP, SC_DROP},
-        {T_PLASMA, SC_PLASMA}, {T_STAGE, SC_STAGE}, {T_TUNNEL, SC_TUNNEL}, {T_FINALE, SC_FINALE}};
-    int n = sizeof(cues) / sizeof(cues[0]), i = 0;
-    while (i + 1 < n && t >= cues[i + 1].s) i++;
-    if (t0) *t0 = cues[i].s;
-    return cues[i].sc;
-}
+struct Cue {
+    int part;          // index into the part registry
+    double t0, t1;     // trailer seconds
+};
+
+struct Timeline {
+    bool boot = true, finale = true;
+    std::vector<Cue> cues;          // graphics parts in order (the finale is the last cue when enabled)
+    std::vector<double> cuts;       // start times of every cue after the first (scene transitions)
+    double demoStart = BOOT_END;    // first graphics frame (mode X when booting)
+    double musicAt = BOOT_MUSIC_AT; // trailer time the song starts
+    double songStart = 0;           // song time at musicAt
+    double hit = -1;                // finale: the cube lands on the logo (frame-exact); -1 without finale
+    double finaleStart = -1;
+    double off = 0;                 // CRT power-off starts
+    double length = 0;              // total seconds (whole frames)
+    int frames = 0;
+    bool songTooShort = false;      // arrangement longer than the song: the ending no longer lands on the hit
+    bool solo = false;              // part preview: no power on/off, no glitches
+
+    double songAt(double t) const { return songStart + (t - musicAt); }
+    double beatAt(double t) const { return (t - musicAt) / BEAT; }
+    const Cue* cueAt(double t) const;
+};
+
+// partBars[i] = length in bars of the i-th part in play order (finale excluded; it is appended when enabled).
+Timeline buildTimeline(bool boot, bool finale, const std::vector<int>& order, const std::vector<int>& partBars,
+                       int finalePart);
+std::string fmtTime(double s);   // m:ss.s

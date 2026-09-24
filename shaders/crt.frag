@@ -10,6 +10,7 @@ uniform sampler2D uSrc, uGlow, uPrev;
 uniform vec2 uSrcSize, uOut;
 uniform float uT, uOnT, uOffT, uRoll, uJitter, uKick;
 uniform float uTear, uTearSeed, uRGB, uSnow, uHold, uBulge, uDegauss, uPersist;
+uniform float uScan, uFx;   // sliders: scanline strength, effects weighting (1 = reference look)
 uniform int uMode;  // 0 = VGA text (31 kHz monitor, sharp), 1 = mode X graphics (soft)
 
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -37,8 +38,8 @@ vec3 fetchLine(float x, float line) {
     vec3 c = s / ws;
     // sharpness "ringing" (TV peaking circuit) + a faint RF multipath ghost trailing to the right
     vec3 behind = texel(floor(fx - 1.5), y);
-    c = max(c + (c - behind) * 0.16, 0.0);
-    c += texel(floor(fx - 5.0), y) * 0.045;
+    c = max(c + (c - behind) * 0.16 * uFx, 0.0);
+    c += texel(floor(fx - 5.0), y) * 0.045 * uFx;
     return c;
 }
 
@@ -86,7 +87,7 @@ void main() {
     uvc += uDegauss * 0.035 * vec2(sin(uvc.y * 7.0 + uT * 43.0), sin(uvc.x * 5.0 + uT * 37.0));
 
     // tube curvature
-    vec2 cuv = uvc * (1.0 + vec2(0.055, 0.075) * (uvc.yx * uvc.yx));
+    vec2 cuv = uvc * (1.0 + vec2(0.055, 0.075) * min(uFx, 1.6) * (uvc.yx * uvc.yx));
     vec2 q = abs(cuv) - vec2(1.0) + 0.035;
     float edge = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - 0.035;
     float inside = 1.0 - smoothstep(-0.004, 0.004, edge);
@@ -104,9 +105,12 @@ void main() {
     float srcLine = (1.0 - sc.y) * uSrcSize.y - 0.5;   // continuous source line coordinate, top = 0
     float l0 = floor(srcLine), f = srcLine - l0;
     // RGB misconvergence grows toward the edges; uRGB adds a glitch split (in source pixels)
-    float split = (abs(sc.x - 0.5) * 0.9 + uRGB) / uSrcSize.x;
+    float split = (abs(sc.x - 0.5) * 0.9 * uFx + uRGB) / uSrcSize.x;
     vec3 col = vec3(0.0);
-    float beamBase = uMode == 0 ? 0.14 : 0.11;   // very narrow beam = strong, near-black scanline gaps
+    // beam width from the scanline slider: 0 = smooth (no gaps), 1 = reference (near-black gaps), 2 = razor thin
+    float b1 = uMode == 0 ? 0.14 : 0.11, b2 = uMode == 0 ? 0.085 : 0.07;
+    float beamBase = uScan <= 1.0 ? mix(0.55, b1, uScan) : mix(b1, b2, uScan - 1.0);
+    float scanComp = clamp((b1 + 0.05) / (beamBase + 0.05), 0.3, 2.0);   // keep brightness as the beam narrows
     // anti-alias the beam against the output pixel grid: add the pixel footprint (in source lines) as box variance
     float fp = uSrcSize.y / scrH * (1.0 + 0.075);
     float aa = fp * fp / 12.0;
@@ -126,7 +130,7 @@ void main() {
         sigma = sqrt(sigma * sigma + aa);
         col += c * exp(-d * d / (2.0 * sigma * sigma));
     }
-    col *= uMode == 0 ? 2.25 : 2.85;
+    col *= (uMode == 0 ? 2.25 : 2.85) * scanComp;
     if (dotOnly > 0.5) col = vec3(0.0);
 
     // degauss purity blotches: slow rainbow patches across the face
@@ -138,22 +142,23 @@ void main() {
 
     // aperture grille (subtle: survives YouTube)
     int m = int(mod(frag.x, 3.0));
-    vec3 mask = vec3(m == 0 ? 1.0 : 0.82, m == 1 ? 1.0 : 0.82, m == 2 ? 1.0 : 0.82);
-    col *= mask * 1.08;
+    float md = 1.0 - 0.18 * min(uFx, 2.0);
+    vec3 mask = vec3(m == 0 ? 1.0 : md, m == 1 ? 1.0 : md, m == 2 ? 1.0 : md);
+    col *= mask * (1.0 + 0.08 * uFx);
 
     // halation (+ extra while the tube is overdriven)
     vec3 glow = lin(texture(uGlow, sc).rgb);
-    col += glow * ((uMode == 0 ? 0.18 : 0.24) + (gain - 1.0) * 0.5);
+    col += glow * ((uMode == 0 ? 0.18 : 0.24) * uFx + (gain - 1.0) * 0.5);
 
     // overdriven raster at power on/off: everything lifts toward white
     col = col * gain + vec3(0.80, 0.86, 1.0) * wash;
 
     // vignette + a visible 60 Hz hum bar rolling up the screen + fine noise
     vec2 v = sc * (1.0 - sc);
-    col *= pow(clamp(v.x * v.y * 16.0, 0.0, 1.0), 0.18);
+    col *= pow(clamp(v.x * v.y * 16.0, 0.0, 1.0), 0.18 * uFx);
     float hum = abs(fract(sc.y * 0.5 - uT * 0.23) - 0.5);
-    col *= 1.0 - 0.045 * smoothstep(0.30, 0.5, hum);
-    col += (hash(frag + fract(uT) * 91.0) - 0.5) * 0.012;
+    col *= 1.0 - 0.045 * uFx * smoothstep(0.30, 0.5, hum);
+    col += (hash(frag + fract(uT) * 91.0) - 0.5) * 0.012 * uFx;
     col *= vblank * inside * fade;
 
     // the beam itself while the raster is a dot or a line: a hot core with a soft halo
@@ -166,7 +171,7 @@ void main() {
     col = max(col, prev * uPersist);
 
     // subtle glass reflection on the curved face
-    float refl = smoothstep(0.9, 0.0, length((uv - vec2(-0.55, 0.62)) * vec2(1.0, 1.6))) * 0.005;
+    float refl = smoothstep(0.9, 0.0, length((uv - vec2(-0.55, 0.62)) * vec2(1.0, 1.6))) * 0.005 * uFx;
     col += refl * inside * step(0.3, uOnT) * fade;
     o = vec4(pow(max(col, 0.0), vec3(1.0 / 2.2)), 1.0);
 }
