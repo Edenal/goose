@@ -111,8 +111,8 @@ static void SDLCALL audioCb(void* ud, SDL_AudioStream* s, int additional, int) {
 
 // ------------------------------------------------------------------ main
 int main(int argc, char** argv) {
-    std::string exportPath, framesArg, framesPrefix, partId, wavPath;
-    bool web = false, defaults = false, list = false;
+    std::string exportPath, framesArg, framesPrefix, partId, wavPath, menuShot, menuKeys;
+    bool web = false, defaults = false, list = false, isoTest = false;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--export") && i + 1 < argc) exportPath = argv[++i];
         else if (!strcmp(argv[i], "--frames") && i + 2 < argc) { framesArg = argv[++i]; framesPrefix = argv[++i]; }
@@ -120,9 +120,19 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--web")) web = true;
         else if (!strcmp(argv[i], "--defaults")) defaults = true;
         else if (!strcmp(argv[i], "--list")) list = true;
+        else if (!strcmp(argv[i], "--isolation-test")) isoTest = true;
+        else if (!strcmp(argv[i], "--download-song")) {   // test the first-run download path
+            std::string e;
+            std::vector<float> pcm;
+            bool ok = downloadSong(e) && decodeSong(downloadedSongPath(), pcm, e);
+            fprintf(stderr, "%s %s (%zu samples)\n", ok ? "ok" : "FAILED", ok ? downloadedSongPath().c_str() : e.c_str(), pcm.size());
+            return ok ? 0 : 1;
+        }
         else if (!strcmp(argv[i], "--wav") && i + 1 < argc) wavPath = argv[++i];
+        else if (!strcmp(argv[i], "--menu-shot") && i + 1 < argc) menuShot = argv[++i];
+        else if (!strcmp(argv[i], "--keys") && i + 1 < argc) menuKeys = argv[++i];
     }
-    bool cli = !exportPath.empty() || !framesArg.empty() || list || !wavPath.empty();
+    bool cli = !exportPath.empty() || !framesArg.empty() || list || !wavPath.empty() || !menuShot.empty() || isoTest;
     if (!SDL_Init(SDL_INIT_VIDEO | (cli ? 0 : SDL_INIT_AUDIO))) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
@@ -174,6 +184,52 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    // ---------------------------------------------------------------- CLI: a picture of the menu (for testing)
+    if (!menuShot.empty()) {
+        Menu menu; MenuState ms;
+        ms.s = &S; ms.parts = &R.parts; ms.tl = tl; ms.ffmpeg = findFfmpeg();
+        ms.musicReady = !song.empty(); ms.music = ms.musicReady ? "READY" : "MISSING";
+        std::stringstream ks(menuKeys); std::string k;
+        while (std::getline(ks, k, ',')) {   // simulated keys: up down left right space tab enter shift+up ... text:ABC
+            bool sh = k.rfind("shift+", 0) == 0; if (sh) k = k.substr(6);
+            int code = k == "up" ? SDLK_UP : k == "down" ? SDLK_DOWN : k == "left" ? SDLK_LEFT : k == "right" ? SDLK_RIGHT
+                     : k == "space" ? SDLK_SPACE : k == "tab" ? SDLK_TAB : k == "enter" ? SDLK_RETURN : k == "esc" ? SDLK_ESCAPE
+                     : k == "pgdn" ? SDLK_PAGEDOWN : k == "end" ? SDLK_END : 0;
+            if (k.rfind("text:", 0) == 0) { menu.text(k.substr(5).c_str(), ms); continue; }
+            MenuAction a = menu.key(code, sh, ms);
+            if (a == MA_CHANGED) { look = lookOf(S); tl = S.timeline(R.parts); ms.tl = tl; }
+        }
+        if (getenv("GOOSE_SHOT_EXPORT")) { ms.exporting = true; ms.exportFrac = 0.42; ms.exportEta = 83; ms.exportPath = S.outDir + "/goose-demo.mp4"; }
+        Screen scr;
+        std::vector<uint8_t> px((size_t)OUT_W * OUT_H * 4);
+        for (int i = 0; i < 4; i++) { menu.draw(scr, ms, 1.0 + i / 60.0); R.renderText(scr, 1.0 + i / 60.0, look); }
+        glBindFramebuffer(GL_FRAMEBUFFER, R.menuFBO());
+        glReadPixels(0, 0, OUT_W, OUT_H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        stbi_flip_vertically_on_write(1);
+        stbi_write_png(menuShot.c_str(), OUT_W, OUT_H, 4, px.data(), OUT_W * 4);
+        fprintf(stderr, "wrote %s\n", menuShot.c_str());
+        return 0;
+    }
+    // ---------------------------------------------------------------- CLI: menu frames must not leak into export frames
+    if (isoTest) {
+        auto grab = [&](std::vector<uint8_t>& px) {
+            px.resize((size_t)OUT_W * OUT_H * 4);
+            glBindFramebuffer(GL_FRAMEBUFFER, R.demoFBO());
+            glReadPixels(0, 0, OUT_W, OUT_H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        };
+        std::vector<uint8_t> a, b;
+        Menu menu; MenuState ms; ms.s = &S; ms.parts = &R.parts; ms.tl = tl; Screen scr;
+        int maxd = 0;
+        for (int f = 1600; f < 1660; f++) {   // across the plasma cut
+            R.resetDemoHistory(); R.renderDemo((f - 1) / (double)FPS, tl, st, look); R.renderDemo(f / (double)FPS, tl, st, look); grab(a);
+            R.resetDemoHistory(); R.renderDemo((f - 1) / (double)FPS, tl, st, look);
+            menu.draw(scr, ms, 1.0); R.renderText(scr, 1.0, look);   // a menu frame in between (the in-app export does this)
+            R.renderDemo(f / (double)FPS, tl, st, look); grab(b);
+            for (size_t i = 0; i < a.size(); i++) maxd = std::max(maxd, abs((int)a[i] - (int)b[i]));
+        }
+        fprintf(stderr, "isolation: max pixel difference %d (0 = menu frames never reach the export)\n", maxd);
+        return maxd == 0 ? 0 : 1;
+    }
     // ---------------------------------------------------------------- CLI: stills
     if (!framesArg.empty()) {
         std::stringstream ss(framesArg); std::string tok;

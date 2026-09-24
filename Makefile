@@ -6,7 +6,7 @@ SRC      = src/main.cpp src/textmode.cpp src/audio.cpp src/timeline.cpp src/part
 
 build/goose: $(SRC) src/*.h
 	@mkdir -p build out
-	$(CXX) $(CXXFLAGS) $(SRC) -o $@ $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) $(SRC) -o $@.new $(LDFLAGS) && mv $@.new $@
 
 assets:
 	python3 tools/build_assets.py
@@ -15,6 +15,12 @@ run: build/goose
 	./build/goose
 
 export: build/goose
-	./build/goose --export out/goose.mp4
+	./build/goose --export out/goose.mp4 --web
 
-.PHONY: assets run export
+app: build/goose
+	sh tools/make_app.sh
+
+zip: app
+	cd build && rm -f GOOSE-macOS.zip && ditto -c -k --keepParent GOOSE.app GOOSE-macOS.zip
+
+.PHONY: assets run export app zip

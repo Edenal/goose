@@ -28,12 +28,13 @@ struct Menu {
     bool editing = false;
     std::string edit;
     double playFrom = 0;           // set with MA_PLAY_FROM
+    int helpCol[7] = {1, 10, 24, 38, 50, 58, 70};   // help bar item columns (set by draw)
 
     MenuAction key(int key, bool shift, MenuState& m);   // SDL keycodes
     MenuAction text(const char* utf8, MenuState& m);
     MenuAction click(int col, int row, bool dbl, MenuState& m);
     MenuAction wheel(int dy, MenuState& m);
-    void draw(Screen& s, const MenuState& m, double t);
+    void draw(Screen& s, const MenuState& m, double t);   // (updates helpCol)
 
 private:
     std::vector<std::string> rows(const MenuState& m) const;   // "#boot", part ids..., "#finale"

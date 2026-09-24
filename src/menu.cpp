@@ -159,9 +159,9 @@ MenuAction Menu::click(int col, int row, bool dbl, MenuState& m) {
         }
         return activateOpt(m);
     }
-    if (row == 24) {   // help bar
-        if (col < 10) return MA_PLAY_ALL;
-        if (col >= 58 && col < 69) return MA_EXPORT;
+    if (row == 24) {   // help bar: F5 Play / F9 Export are clickable
+        if (col >= helpCol[0] && col < helpCol[1]) return MA_PLAY_ALL;
+        if (col >= helpCol[5] && col < helpCol[6]) return MA_EXPORT;
     }
     return MA_NONE;
 }
@@ -171,9 +171,9 @@ MenuAction Menu::wheel(int dy, MenuState& m) {
     return MA_NONE;
 }
 
-static void dialogBox(Screen& s, int r0, int c0, int r1, int c1, const char* title) {
+static void dialogBox(Screen& s, int r0, int c0, int r1, int c1, const char* title, bool shadow = false) {
     s.box(r0, c0, r1, c1, AT(LGR, BLK), true);
-    s.shadow(r0, c0, r1, c1);
+    if (shadow) s.shadow(r0, c0, r1, c1);
     std::string t = std::string(" ") + title + " ";
     s.center(r0, t.c_str(), AT(LGR, BLU), c0, c1);
 }
@@ -258,7 +258,8 @@ void Menu::draw(Screen& s, const MenuState& m, double t) {
         } else if (const std::string* f = fieldOf(*m.s, i)) {
             bool ed = editing && sel;
             std::string val = ed ? edit : *f;
-            s.put(r, VAL_C, fit(val, 20).c_str(), ed ? AT(BLK, YEL) : base);
+            if (ed && val.size() > 19) val = val.substr(val.size() - 19);   // keep the cursor end in view
+            s.put(r, VAL_C, (ed ? val : fit(val, 20)).c_str(), ed ? AT(BLK, YEL) : base);
             if (ed) { s.curRow = r; s.curCol = VAL_C + (int)std::min<size_t>(val.size(), 19); }
         } else if (i == O_QUALITY) {
             s.put(r, VAL_C, S.master ? "MASTER  CRF 14" : "WEB  24 Mbps", base);
@@ -284,14 +285,20 @@ void Menu::draw(Screen& s, const MenuState& m, double t) {
     if (msg.empty() && !m.musicReady) msg = "Music missing: select Music and press Enter to download it.";
     s.put(23, 1, fit(msg, 78).c_str(), AT(BLU, m.tl.songTooShort || m.ffmpeg.empty() || !m.musicReady ? LRD : LCY));
     s.fill(24, 0, 24, 79, ' ', AT(LGR, BLK));
-    struct H { int c; const char* k; const char* t; } help[] = {
-        {1, "F5", "Play"}, {10, "\x11\xD9", "Play from"}, {24, "Space", "On/off"}, {38, "Shift+\x18\x19", "Move"},
-        {50, "Tab", "Pane"}, {58, "F9", "Export"}, {70, "Esc", "Quit"}};
-    for (const H& h : help) { s.put(24, h.c, h.k, AT(LGR, RED)); s.put(24, h.c + (int)strlen(h.k) + 1, h.t, AT(LGR, BLK)); }
+    struct H { const char* k; const char* t; } help[] = {
+        {"F5", "Play"}, {"\x11\xD9", "From here"}, {"Space", "On/off"}, {"Shift+\x18\x19", "Move"},
+        {"Tab", "Pane"}, {"F9", "Export"}, {"Esc", "Quit"}};
+    int hc = 2;
+    for (const H& h : help) {
+        s.put(24, hc, h.k, AT(LGR, RED));
+        s.put(24, hc + (int)strlen(h.k) + 1, h.t, AT(LGR, BLK));
+        helpCol[&h - help] = hc;
+        hc += (int)strlen(h.k) + (int)strlen(h.t) + 2;
+    }
 
     // ---- export progress
     if (m.exporting) {
-        dialogBox(s, 8, 12, 15, 67, "Exporting");
+        dialogBox(s, 8, 12, 15, 67, "Exporting", true);
         int w = 50, n = (int)(m.exportFrac * w + 0.5);
         for (int k = 0; k < w; k++) s.putc(10, 15 + k, k < n ? 0xDB : 0xB0, AT(LGR, k < n ? BLU : DGR));
         snprintf(b, sizeof b, "%5.1f%%   %d / %d frames   ETA %s", m.exportFrac * 100, (int)(m.exportFrac * m.tl.frames),

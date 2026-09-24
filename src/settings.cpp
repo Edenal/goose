@@ -25,7 +25,13 @@ void Settings::reconcile(const std::vector<PartDef>& parts) {
     for (const PartDef& p : parts) {
         if (p.special == "finale") continue;
         if (std::find(keep.begin(), keep.end(), p.id) == keep.end()) {
-            keep.push_back(p.id);                 // new part: appended (by @order), default state
+            // new part: insert after the last listed part with a lower @order, in its default state
+            size_t at = 0;
+            for (size_t k = 0; k < keep.size(); k++) {
+                int j = findPart(parts, keep[k]);
+                if (j >= 0 && parts[j].order < p.order) at = k + 1;
+            }
+            keep.insert(keep.begin() + at, p.id);
             if (p.defaultOn) enabled.insert(p.id);
         }
     }
