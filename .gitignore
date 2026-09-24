@@ -1,0 +1,10 @@
+# build + renders
+build/
+out/
+*.zip
+.DS_Store
+
+# not redistributable: copyrighted music and the Adobe-licensed display font
+assets/*.mp3
+assets/gen/song_cut.wav
+assets/*.otf
