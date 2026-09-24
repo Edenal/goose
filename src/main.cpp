@@ -582,9 +582,11 @@ static void SDLCALL audioCb(void* ud, SDL_AudioStream* s, int additional, int) {
 
 int main(int argc, char** argv) {
     std::string exportPath, framesArg, framesPrefix;
+    bool webEncode = false;  // 24 Mbps upload-sized encode instead of the CRF 14 master
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--export") && i + 1 < argc) exportPath = argv[++i];
         else if (!strcmp(argv[i], "--frames") && i + 2 < argc) { framesArg = argv[++i]; framesPrefix = argv[++i]; }
+        else if (!strcmp(argv[i], "--web")) webEncode = true;
     }
     bool offline = !exportPath.empty() || !framesArg.empty();
     if (!SDL_Init(SDL_INIT_VIDEO | (offline ? 0 : SDL_INIT_AUDIO))) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
@@ -624,10 +626,11 @@ int main(int argc, char** argv) {
         char cmd[2048];
         snprintf(cmd, sizeof cmd,
                  "ffmpeg -v error -y -f rawvideo -pix_fmt rgba -s %dx%d -framerate %d -i - -i out/soundtrack.wav "
-                 "-vf vflip,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p -c:v libx264 -preset slow -crf 14 "
-                 "-colorspace bt709 -color_primaries bt709 -color_trc bt709 -c:a aac -b:a 320k -t %.3f "
+                 "-vf vflip,scale=out_color_matrix=bt709:out_range=tv,format=yuv420p -c:v libx264 -preset slow %s "
+                 "-colorspace bt709 -color_primaries bt709 -color_trc bt709 -c:a aac -b:a %s -t %.3f "
                  "-movflags +faststart \"%s\"",
-                 OUT_W, OUT_H, FPS, LENGTH, exportPath.c_str());
+                 OUT_W, OUT_H, FPS, webEncode ? "-b:v 24M -maxrate 30M -bufsize 48M" : "-crf 14",
+                 webEncode ? "256k" : "320k", LENGTH, exportPath.c_str());
         FILE* ff = popen(cmd, "w");
         if (!ff) { perror("ffmpeg"); return 1; }
         int total = (int)std::lround(LENGTH * FPS);

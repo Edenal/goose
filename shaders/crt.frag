@@ -106,7 +106,10 @@ void main() {
     // RGB misconvergence grows toward the edges; uRGB adds a glitch split (in source pixels)
     float split = (abs(sc.x - 0.5) * 0.9 + uRGB) / uSrcSize.x;
     vec3 col = vec3(0.0);
-    float beamBase = uMode == 0 ? 0.22 : 0.19;   // narrow beam = visible scanline gaps
+    float beamBase = uMode == 0 ? 0.14 : 0.11;   // very narrow beam = strong, near-black scanline gaps
+    // anti-alias the beam against the output pixel grid: add the pixel footprint (in source lines) as box variance
+    float fp = uSrcSize.y / scrH * (1.0 + 0.075);
+    float aa = fp * fp / 12.0;
     for (int k = 0; k <= 1; k++) {
         float line = clamp(l0 + float(k), 0.0, uSrcSize.y - 1.0);
         vec3 c = fetchRGB(sc.x, uSrcSize.y - 1.0 - line, split);
@@ -119,10 +122,11 @@ void main() {
             c = mix(c, sn, uSnow);
         }
         float d = abs(f - float(k));
-        vec3 sigma = beamBase + 0.10 * sqrt(c);                     // bright lines bloom a little wider
+        vec3 sigma = beamBase + 0.07 * sqrt(c);                     // bright lines bloom a little wider
+        sigma = sqrt(sigma * sigma + aa);
         col += c * exp(-d * d / (2.0 * sigma * sigma));
     }
-    col *= uMode == 0 ? 1.50 : 1.82;
+    col *= uMode == 0 ? 2.25 : 2.85;
     if (dotOnly > 0.5) col = vec3(0.0);
 
     // degauss purity blotches: slow rainbow patches across the face
