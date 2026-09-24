@@ -53,30 +53,35 @@ void main() {
     float scrH = uOut.y * 0.965, scrW = scrH * 4.0 / 3.0;
     vec2 uv = (frag - uOut * 0.5) / vec2(scrW, scrH) * 2.0;   // -1..1 across the tube, y up
 
-    // ---- power on (dot -> line -> overexposed raster that settles) and its exact reverse at power off
-    float sx = 1.0, sy = 1.0, gain = 1.0, wash = 0.0, halo = 0.0, dotOnly = 0.0;
-    if (uOnT < 1.6) {
+    // ---- power on: switch click, the beam flares as a dot, opens into a line, then into a raster that blooms
+    // and settles without bouncing. Power off is the same film backwards: HV surge (the picture swells and
+    // brightens), collapse to a line that carries all the energy, then to a dot that lingers and fades.
+    float sx = 1.0, sy = 1.0, gain = 1.0, wash = 0.0, halo = 0.0, dotOnly = 0.0, swell = 0.0;
+    if (uOnT < 1.4) {
         float t = uOnT;
-        sx = mix(0.004, 1.0, ease((t - 0.10) / 0.14));
-        sy = mix(0.005, 1.0, ease((t - 0.24) / 0.24));
-        dotOnly = 1.0 - step(0.10, t);
-        gain = 1.0 + 3.2 * (1.0 - ease((t - 0.35) / 1.0));
-        wash = 0.55 * (1.0 - ease((t - 0.30) / 0.75)) * step(0.10, t);
-        halo = (1.0 - ease((t - 0.30) / 0.6)) * smoothstep(0.0, 0.05, t);
+        sx = mix(0.004, 1.0, ease((t - 0.14) / 0.12));
+        sy = mix(0.005, 1.0, ease((t - 0.26) / 0.20));
+        dotOnly = 1.0 - step(0.14, t);
+        gain = 1.0 + 1.6 * (1.0 - ease((t - 0.30) / 0.60)) * step(0.14, t);
+        wash = 0.30 * (1.0 - ease((t - 0.28) / 0.35)) * step(0.14, t);
+        halo = (1.0 - ease((t - 0.32) / 0.35)) * smoothstep(0.05, 0.09, t);
     }
+    float fade = 1.0;
     if (uOffT >= 0.0) {
-        float t = uOffT;
-        gain = 1.0 + 3.2 * ease(t / 0.25);
-        wash = 0.55 * ease((t - 0.05) / 0.20);
-        sy = mix(1.0, 0.005, ease((t - 0.25) / 0.20));
-        sx = mix(1.0, 0.004, ease((t - 0.45) / 0.15));
-        halo = ease(t / 0.3) * (1.0 - ease((t - 0.6) / 0.8));
-        dotOnly = step(0.60, t);
+        float t = uOffT, surge = ease(t / 0.12);
+        float p1 = ease((t - 0.12) / 0.14), p2 = ease((t - 0.26) / 0.12);
+        swell = 0.02 * surge;
+        gain = (1.0 + 1.2 * surge) * (1.0 + 1.5 * p1);   // a thinner raster burns brighter
+        wash = 0.18 * surge;
+        sy = mix(1.0, 0.005, p1);
+        sx = mix(1.0, 0.004, p2);
+        halo = max(p1, 0.35 * surge) * (1.0 - ease((t - 0.40) / 0.90));
+        dotOnly = step(0.38, t);
+        fade = 1.0 - ease((t - 0.38) / 0.90);
     }
-    float fade = uOffT >= 0.0 ? 1.0 - ease((uOffT - 0.60) / 0.8) : 1.0;
 
     // raster bulge: bright pictures sag the high voltage and the picture grows
-    vec2 uvc = uv / (vec2(sx, sy) * (1.0 + 0.018 * uBulge));
+    vec2 uvc = uv / (vec2(sx, sy) * (1.0 + 0.018 * uBulge + swell));
     // degauss: the whole raster wobbles while the coil field decays
     uvc += uDegauss * 0.035 * vec2(sin(uvc.y * 7.0 + uT * 43.0), sin(uvc.x * 5.0 + uT * 37.0));
 
@@ -101,22 +106,30 @@ void main() {
     // RGB misconvergence grows toward the edges; uRGB adds a glitch split (in source pixels)
     float split = (abs(sc.x - 0.5) * 0.9 + uRGB) / uSrcSize.x;
     vec3 col = vec3(0.0);
-    float beamBase = uMode == 0 ? 0.30 : 0.27;
+    float beamBase = uMode == 0 ? 0.22 : 0.19;   // narrow beam = visible scanline gaps
     for (int k = 0; k <= 1; k++) {
         float line = clamp(l0 + float(k), 0.0, uSrcSize.y - 1.0);
         vec3 c = fetchRGB(sc.x, uSrcSize.y - 1.0 - line, split);
+        if (uSnow > 0.0) {  // static rides on the scanlines like the real thing
+            float fr = floor(uT * 60.0);
+            float n = hash(vec2(floor(sc.x * uSrcSize.x * 1.6), line) + fract(fr * 0.137) * 311.0);
+            float streak = step(0.975, hash(vec2(line, fr)));
+            float band = smoothstep(0.10, 0.0, abs(fract(line / uSrcSize.y + uT * 0.9) - 0.5) - 0.38);
+            vec3 sn = vec3(n * n * (1.1 + 0.5 * band) + streak * 0.55) * vec3(0.92, 0.96, 1.0);
+            c = mix(c, sn, uSnow);
+        }
         float d = abs(f - float(k));
-        vec3 sigma = beamBase + 0.16 * sqrt(c);                     // bright lines bloom wider
+        vec3 sigma = beamBase + 0.10 * sqrt(c);                     // bright lines bloom a little wider
         col += c * exp(-d * d / (2.0 * sigma * sigma));
     }
-    col *= uMode == 0 ? 1.45 : 1.75;
+    col *= uMode == 0 ? 1.50 : 1.82;
     if (dotOnly > 0.5) col = vec3(0.0);
 
     // degauss purity blotches: slow rainbow patches across the face
     if (uDegauss > 0.0) {
         float a = atan(uv.y, uv.x) * 2.0 + length(uv) * 5.0 - uT * 9.0;
         vec3 rb = 0.5 + 0.5 * cos(a + vec3(0.0, 2.1, 4.2));
-        col *= mix(vec3(1.0), rb * 1.6, uDegauss * 0.65);
+        col *= mix(vec3(1.0), rb * 1.6, uDegauss * 0.45);
     }
 
     // aperture grille (subtle: survives YouTube)
@@ -126,17 +139,10 @@ void main() {
 
     // halation (+ extra while the tube is overdriven)
     vec3 glow = lin(texture(uGlow, sc).rgb);
-    col += glow * ((uMode == 0 ? 0.22 : 0.34) * (1.0 + 0.25 * uKick) + (gain - 1.0) * 0.6);
+    col += glow * ((uMode == 0 ? 0.18 : 0.24) + (gain - 1.0) * 0.5);
 
     // overdriven raster at power on/off: everything lifts toward white
     col = col * gain + vec3(0.80, 0.86, 1.0) * wash;
-
-    // snow + sync-loss noise
-    if (uSnow > 0.0) {
-        float n = hash(floor(frag / vec2(3.0, 2.0)) + fract(uT * 13.7) * 311.0);
-        float streak = hash(vec2(floor(frag.y / 2.0), floor(uT * 60.0)));
-        col = mix(col, vec3(n * n) * (0.6 + 0.8 * step(0.97, streak)), uSnow);
-    }
 
     // vignette + a visible 60 Hz hum bar rolling up the screen + fine noise
     vec2 v = sc * (1.0 - sc);

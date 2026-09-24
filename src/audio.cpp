@@ -188,7 +188,7 @@ static void powerOff(Bus& b, double t0) {
     crackle(b, t0 + 0.35, 1.2, 0.2f, 2);                       // the tube discharging
 }
 
-static void staticBurst(Bus& b, double t0, double dur) {       // sync loss hiss with a 60 Hz buzz
+static void staticBurst(Bus& b, double t0, double dur, float vol) {       // sync loss hiss with a 60 Hz buzz
     rngState = 31337;
     float bp1 = 0, bp2 = 0;
     for (int i = 0; i < SR * dur; i++) {
@@ -196,7 +196,7 @@ static void staticBurst(Bus& b, double t0, double dur) {       // sync loss hiss
         bp1 += 0.5f * (frand() - bp1); bp2 += 0.05f * (bp1 - bp2);
         float buzz = 0.6f + 0.4f * (fmod(tt * 60, 1.0) < 0.5 ? 1.f : -1.f);
         float env = (float)(std::min(1.0, tt / 0.05) * std::min(1.0, (dur - tt) / 0.08));
-        float s = (bp1 - bp2) * buzz * env * 0.16f;
+        float s = (bp1 - bp2) * buzz * env * 0.16f * vol;
         b.add(t0 + tt, s * (0.9f + 0.2f * frand()), s * (0.9f + 0.2f * frand()));
     }
 }
@@ -245,7 +245,7 @@ bool Soundtrack::build(const std::string& songWav) {
             case SFX_POWER_ON: powerOn(b, s.t); break;
             case SFX_RELAY: relay(b, s.t, 0.35f); break;
             case SFX_POWER_OFF: powerOff(b, s.t); break;
-            case SFX_STATIC: staticBurst(b, s.t, s.dur); break;
+            case SFX_STATIC: staticBurst(b, s.t, s.dur, s.vol); break;
             case SFX_DEGAUSS_SMALL: degaussSmall(b, s.t); break;
         }
     }

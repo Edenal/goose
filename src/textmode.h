@@ -22,7 +22,7 @@ struct Screen {
 };
 
 enum SfxKind { SFX_KEY, SFX_ENTER, SFX_BEEP, SFX_HDD, SFX_POWER_ON, SFX_RELAY, SFX_POWER_OFF, SFX_STATIC, SFX_DEGAUSS_SMALL };
-struct Sfx { double t; SfxKind kind; float dur; };
+struct Sfx { double t; SfxKind kind; float dur; float vol = 1.0f; };
 
 // Fill the screen for time t (0 <= t < T_DEMO). Returns false if the text screen is blank.
 bool drawTextMode(Screen& s, double t, float vuL, float vuR);

@@ -376,54 +376,58 @@ struct Demo {
     double flashAt(double t) {
         double f = 0;
         const double cuts[] = {T_DEMO, T_DROP, T_PLASMA, T_STAGE, T_TUNNEL};
-        for (double c : cuts) if (t >= c) f = std::max(f, exp(-(t - c) * 7.0) * 0.6);
-        if (t >= T_HIT) f = std::max(f, exp(-(t - T_HIT) * 3.2));
+        for (double c : cuts) if (t >= c) f = std::max(f, exp(-(t - c) * 9.0) * 0.3);
+        if (t >= T_HIT) f = std::max(f, exp(-(t - T_HIT) * 4.0) * 0.7);
         return f;
     }
 
     // ---------------------------------------------------------------- glitches (pure function of t)
     struct Glitch { double tear = 0, seed = 0, rgb = 0, snow = 0, hold = 0, bulge = 0, degauss = 0, jitter = 0, roll = 0; };
     static double hashd(double n) { double x = sin(n * 91.345 + 3.7) * 47453.5453; return x - floor(x); }
-    Glitch glitchAt(double t, double kick) {
+    // Glitches live at the start (power-on, reboot, the VGA mode switch), at scene transitions, and at the end
+    // (signal breakdown before the power-off). Inside a part the picture stays clean: the content is the focus.
+    Glitch glitchAt(double t) {
         Glitch g;
         g.seed = (int)floor(t * FPS + 1e-6) % 997;
         auto pulse = [&](double c, double len) { return (t >= c && t < c + len) ? 1 - (t - c) / len : 0.0; };
-        // degauss after power-on, and a small one when the monitor locks onto mode X
-        if (t > 0.30 && t < 2.6) g.degauss = std::min(1.0, (t - 0.30) / 0.12) * exp(-std::max(0.0, t - 0.45) / 0.45);
-        double pd = pulse(T_DEMO, 0.7);
-        g.degauss = std::max(g.degauss, 0.45 * pd * pd);
-        // reboot: the monitor loses sync for a moment
-        double rb = pulse(6.35, 0.22);
-        g.snow = std::max(g.snow, rb * 0.5); g.hold = std::max(g.hold, rb);
-        // the sound test kicks in: a pop on the picture
-        double st = pulse(MUSIC_AT, 0.12);
-        g.tear = std::max(g.tear, st * 0.7); g.rgb += st * 3;
-        // VGA mode switch: garbage (hold loss), then black with snow, then the vertical roll
+        // power-on degauss: follows the coil's sound (swells at 0.12 s, decays over ~0.4 s)
+        if (t > 0.12 && t < 2.2) { double d = t - 0.12; g.degauss = std::min(1.0, d / 0.08) * exp(-d / 0.38) * 0.7; }
+        // reboot: a short horizontal hold slip
+        double rb = pulse(6.35, 0.18);
+        g.hold = rb * 0.8; g.snow = 0.55 * sqrt(rb);
+        // VGA mode switch: garbage with hold loss -> black with light snow -> one vertical roll -> hold settles
         double ms = t - T_DEMO;
-        if (ms > -0.85 && ms < -0.55) { g.hold = std::max(g.hold, 1.4 * (ms + 0.85) / 0.3); g.jitter = 0.6; g.rgb += 2; }
-        if (ms >= -0.55 && ms < 0) { g.snow = std::max(g.snow, 0.35 + 0.35 * sin(ms * 40) * sin(ms * 40)); g.jitter = 1; }
-        if (ms >= 0 && ms < 0.45) g.roll = (1 - easeOut(ms / 0.45)) * 0.9;
-        // demo: every cut tears, and the kicks shake the signal
+        if (ms > -0.85 && ms < -0.55) { double x = (ms + 0.85) / 0.3; g.hold = x; g.jitter = 0.4 * x; g.rgb = 1.5 * x; }
+        if (ms >= -0.55 && ms < 0) g.snow = 0.65 * (1 - clamp01((ms + 0.10) / 0.10)) + 0.3 * pulse(T_DEMO - 0.55, 0.05);
+        if (ms >= 0 && ms < 0.42) g.roll = (1 - easeOut(ms / 0.42)) * 0.9;
+        g.hold = std::max(g.hold, 0.35 * pulse(T_DEMO + 0.38, 0.3));
+        // scene transitions: the signal glitches out of the old part and settles into the new one.
+        // Builds for ~0.12 s into the cut, tears for ~3 frames around it, then a small vertical jolt settles.
         const double cuts[] = {T_DROP, T_PLASMA, T_STAGE, T_TUNNEL, T_FINALE};
         for (double c : cuts) {
-            g.tear = std::max(g.tear, pulse(c - 0.03, 0.14) * 0.9);
-            g.rgb += 6 * pulse(c - 0.03, 0.22);
-            g.hold = std::max(g.hold, 0.6 * pulse(c, 0.12));
+            double d = t - c;
+            if (d <= -0.12 || d >= 0.20) continue;
+            double outk = d < 0 ? (d + 0.12) / 0.12 : 0, ink = d >= 0 ? 1 - d / 0.20 : 0;
+            double k = std::max(outk * outk, ink * ink);
+            g.rgb = std::max(g.rgb, 4.0 * k);
+            g.hold = std::max(g.hold, 0.5 * k);
+            if (fabs(d) < 0.05) g.tear = std::max(g.tear, 0.9);
+            g.snow = std::max(g.snow, 0.6 * exp(-(d / 0.04) * (d / 0.04)) + 0.12 * k);   // static burst on the cut
+            if (d >= 0 && d < 0.12) g.roll = std::max(g.roll, 0.04 * (1 - d / 0.12));
         }
-        bool demo = t >= T_DEMO && t < T_HIT + 1.0;
-        if (demo) {
-            g.tear = std::max(g.tear, std::max(0.0, kick - 0.6) * 1.4);
-            g.rgb += kick * 1.6;
-            // sparse random glitch bursts on off-beats (3-4 frames each)
-            int b = (int)floor(beatAt(t));
-            double h = hashd(b), off = 0.25 + 0.5 * hashd(b + 0.5);
-            double gb = pulse(MUSIC_AT + (b + off) * BEAT, 0.06);
-            if (h < 0.22 && gb > 0) { g.tear = std::max(g.tear, 1.0); g.rgb += 7 * gb; g.hold = std::max(g.hold, 0.7); }
+        // the cube landing on the logo is a transition too, a lighter one
+        double lh = pulse(T_HIT, 0.15);
+        g.rgb = std::max(g.rgb, 2.5 * lh * lh);
+        if (t >= T_HIT && t < T_HIT + 0.035) g.tear = std::max(g.tear, 0.5);
+        // the end: the signal starts breaking up in the last 0.7 s before the power-off
+        double pre = t - (T_OFF - 0.7);
+        if (pre >= 0 && t < T_OFF) {
+            double x = pre / 0.7;
+            g.hold = std::max(g.hold, 0.5 * x * x);
+            g.snow = std::max(g.snow, 0.45 * x * x);
+            double tr = std::max(pulse(T_OFF - 0.52, 0.05), pulse(T_OFF - 0.20, 0.07));
+            g.tear = 0.8 * tr; g.rgb = 3.0 * tr + 1.5 * x;
         }
-        // the logo hit
-        g.rgb += 9 * pulse(T_HIT, 0.3);
-        g.tear = std::max(g.tear, 0.8 * pulse(T_HIT, 0.07));
-        g.bulge = flashAt(t) * 1.6 + kick * 0.6;
         return g;
     }
 
@@ -506,7 +510,7 @@ struct Demo {
             glUniform3f(U(pScene, "uLogoPos"), (float)logoCx, (float)logoCy, (float)logoK);
             double h = t - T_HIT;
             glUniform1f(U(pScene, "uLogoA"), (float)(h >= 0 ? 1 : 0));
-            double wa = h < 0 ? 0 : 1, ws = h < 0 ? 1 : 1 + 0.9 * exp(-h * 9) * cos(h * 26);
+            double wa = h < 0 ? 0 : 1, ws = h < 0 ? 1 : 1 + 0.22 * exp(-h * 10) * cos(h * 20);
             glUniform2f(U(pScene, "uWordAS"), (float)wa, (float)ws);
             glUniform1i(U(pScene, "uBlackout"), sc == SC_BLACK ? 1 : 0);
             drawQuad();
@@ -539,7 +543,7 @@ struct Demo {
         glUniform1i(U(pCRT, "uMode"), mode);
         glUniform1f(U(pCRT, "uOnT"), (float)t);
         glUniform1f(U(pCRT, "uOffT"), (float)(t >= T_OFF ? t - T_OFF : -1.0));
-        Glitch g = glitchAt(t, eK);
+        Glitch g = glitchAt(t);
         glUniform1f(U(pCRT, "uRoll"), (float)g.roll);
         glUniform1f(U(pCRT, "uJitter"), (float)g.jitter);
         glUniform1f(U(pCRT, "uTear"), (float)std::min(1.0, g.tear));

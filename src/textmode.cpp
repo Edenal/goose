@@ -396,6 +396,10 @@ std::vector<Sfx> buildSfx() {
     v.push_back({T_GARBAGE, SFX_STATIC, 0.85f});                  // garbage + sync loss hiss
     v.push_back({T_DEMO - 0.55, SFX_RELAY, 0});                   // monitor re-syncs to mode X
     v.push_back({T_DEMO, SFX_DEGAUSS_SMALL, 0});                  // the tube settles on the new mode
+    v.push_back({6.35, SFX_STATIC, 0.20f, 0.8f});                  // reboot sync loss
+    for (double c : {T_DROP, T_PLASMA, T_STAGE, T_TUNNEL, T_FINALE})
+        v.push_back({c - 0.07, SFX_STATIC, 0.20f, 0.9f});          // transition static
+    v.push_back({T_OFF - 0.60, SFX_STATIC, 0.62f, 0.8f});           // the signal breaks up before power-off
     v.push_back({T_OFF, SFX_POWER_OFF, 0});
     return v;
 }

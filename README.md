@@ -19,8 +19,10 @@ ESA logo.
 - **Look:** mode X output is quantised to the Mega Drive's 9-bit colour ladder with ordered dither.
   - **CRT pass:** curvature, beam scanlines, aperture grille, composite smear, ringing, RF ghost, RGB misconvergence,
     halation and phosphor persistence.
-  - **Glitches:** deterministic in `t`. Every cut, every strong kick and some random off-beats get tearing and
-    chroma splits, and bright frames make the raster bulge.
+  - **Scanlines:** a narrow gaussian beam leaves a visible dark gap between every source line.
+  - **Glitches:** reserved for transitions, so inside a part the content has the focus. They're deterministic in `t`:
+    power-on degauss, a reboot sync loss, the VGA mode switch (garbage, static, roll), a static burst with tear and
+    chroma split on every scene cut, and a signal breakdown before the power-off. The static rides on the scanlines.
 - **Sound:** every keystroke, POST beep, HDD seek, degauss *BWONG* and HV crackle is synthesised in sync with the picture.
 
 ## Quick start (macOS)
