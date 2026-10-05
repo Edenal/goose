@@ -24,6 +24,7 @@ ap.add_argument("--music", default=None, help="audio file copied next to the pag
 ap.add_argument("--credit", default="", help="music credit shown on the page (required for CC-BY tracks)")
 ap.add_argument("--credit-url", default="", help="link for the credit")
 ap.add_argument("--volume", type=float, default=0.6)
+ap.add_argument("--playlist", default=None, help="JSON: music playlist (crossfaded) + ambience bed, see out/web/halloween-playlist.json")
 a = ap.parse_args()
 
 src = open(R("shaders/parts", a.part + ".glsl")).read()
@@ -60,13 +61,33 @@ def png_b64(path, size=None):
 font = png_b64(R("assets/gen/font_bios8x8.png"))
 logo = png_b64(R("assets/gen/logo_cube.png"), 512)
 bars = int(meta.get("bars", 4))
-music_name = ("music" + os.path.splitext(a.music)[1].lower()) if a.music else ""
-credit_html = ""
-if a.music and a.credit:
-    c = html.escape(a.credit)
-    credit_html = f'<a id="credit" href="{html.escape(a.credit_url)}" target="_blank" rel="noopener">{c}</a>' if a.credit_url else f'<span id="credit">{c}</span>'
+import subprocess
+title = a.title or meta.get("name", a.part).title()
+def lufs(path):   # integrated loudness (EBU R128)
+    out = subprocess.run(["ffmpeg", "-nostats", "-i", path, "-af", "ebur128", "-f", "null", "-"], capture_output=True, text=True).stderr
+    vals = re.findall(r"^\s+I:\s+(-?[\d.]+) LUFS", out, re.M)
+    return float(vals[-1]) if vals else -18.0
+PL = None
+if a.playlist:
+    PL = json.load(open(a.playlist))
+elif a.music:
+    PL = {"cross": 2.0, "master": a.volume / 0.6 * 0.85, "music": [{"file": a.music, "credit": a.credit, "url": a.credit_url, "repeat": 1}], "ambience": []}
+tracks = []   # (source file, published base name)
+if PL:
+    for kind, target, key in (("music", -18.0, "m"), ("ambience", -33.0, "a")):
+        for i, t in enumerate(PL.get(kind, [])):
+            t["name"] = f"{key}{i}"
+            t["gain"] = round(min(2.5, 10 ** ((target - lufs(t["file"]) + t.get("gain_db", 0)) / 20)), 3)
+            tracks.append((t["file"], t["name"]))
+    pl_js = {"cross": PL.get("cross", 2.0), "master": PL.get("master", 0.85),
+             "music": [{k: t.get(k) for k in ("name", "credit", "url", "repeat", "trimEnd", "gain")} for t in PL["music"]],
+             "amb": [{k: t.get(k) for k in ("name", "credit", "url", "gain")} for t in PL.get("ambience", [])]}
+else:
+    pl_js = None
 sound_html = ('<button id="snd" aria-pressed="false" title="Sound (M)">&#9834; SOUND OFF</button>'
-              '<div id="hint">CLICK FOR SOUND</div>' + credit_html) if a.music else ""
+              '<a id="credit" target="_blank" rel="noopener"></a>'
+              '<div id="gate" role="button" tabindex="0"><span>&#9654; CLICK TO POWER ON</span><small>sound on &middot; {}</small></div>'
+              .format(html.escape(title))) if PL else ""
 title = a.title or meta.get("name", a.part).title()
 desc = a.desc or meta.get("desc", "")
 
@@ -90,6 +111,12 @@ page = f"""<!doctype html>
           color: #fff6dd; opacity: .8; transition: opacity 1.5s; pointer-events: none; }}
   #credit {{ position: fixed; left: 14px; bottom: 12px; font: 11px monospace; color: #c7adff; opacity: .55; text-decoration: none; }}
   #credit:hover {{ opacity: 1; }}
+  #gate {{ position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+          background: #000; cursor: pointer; color: #fdbb1c; font: 20px monospace; letter-spacing: .2em; text-align: center; }}
+  #gate:focus {{ outline: none; }}
+  #gate span {{ animation: blink 1.1s steps(2, start) infinite; }}
+  #gate small {{ font-size: 12px; letter-spacing: .12em; color: #c7adff; opacity: .7; }}
+  @keyframes blink {{ to {{ visibility: hidden; }} }}
 </style>
 </head>
 <body>
@@ -106,9 +133,7 @@ const FONT = "{font}";
 const LOGO = "{logo}";
 const BEAT = 60 / 90, LEN = {bars} * 4 * BEAT, HOLD = {a.hold}, PERIOD = LEN + HOLD;
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
-const MUSIC_FILE = {json.dumps(music_name)}, VOLUME = {a.volume};
-const MUSIC = !MUSIC_FILE ? "" : MUSIC_FILE.endsWith(".mp3") ? MUSIC_FILE :
-  (new Audio().canPlayType(MUSIC_FILE.endsWith(".ogg") ? 'audio/ogg; codecs="vorbis"' : "audio/flac") ? MUSIC_FILE : "music.mp3");
+const PL = {json.dumps(pl_js)};
 
 const canvas = document.getElementById("c");
 const gl = canvas.getContext("webgl2", {{ antialias: false, alpha: false }});
@@ -172,44 +197,96 @@ function resize() {{
   if (canvas.width !== w || canvas.height !== h) {{ canvas.width = w; canvas.height = h; }}
 }}
 
-// ---- sound: browsers block autoplay, so it starts off; click / M toggles. Web Audio loops gaplessly.
-if (MUSIC) {{
-  const btn = document.getElementById("snd"), hint = document.getElementById("hint");
-  setTimeout(() => hint.style.opacity = 0, 7000);
-  let ac = null, gain = null, el = null, on = false, loading = null;
-  async function start() {{
-    if (location.protocol.startsWith("http") && window.AudioContext) {{
-      ac = ac || new AudioContext();
-      if (!gain) {{
-        gain = ac.createGain(); gain.gain.value = 0; gain.connect(ac.destination);
-        loading = loading || fetch(MUSIC).then(r => r.arrayBuffer()).then(b => ac.decodeAudioData(b)).then(buf => {{
-          const src = ac.createBufferSource(); src.buffer = buf; src.loop = true; src.connect(gain); src.start(); }});
-      }}
-      await ac.resume(); await loading;
-      gain.gain.cancelScheduledValues(ac.currentTime); gain.gain.setTargetAtTime(VOLUME, ac.currentTime, 0.35);
-    }} else {{
-      el = el || Object.assign(new Audio(MUSIC), {{ loop: true, volume: VOLUME }});
-      await el.play();
+// ---- soundtrack: a crossfading music playlist over a looping ambience bed (Web Audio, loudness-normalised).
+// Browsers block sound until the first interaction, so where autoplay is blocked the page opens on a powered-off
+// tube: the click that powers the CRT on also starts the music. Where autoplay works (OBS browser source, kiosk)
+// both start at once.
+let showStart = null;                       // set when the show (CRT power-on + music) begins
+const SOUND = PL && location.protocol.startsWith("http") && window.AudioContext;
+if (SOUND) {{
+  const btn = document.getElementById("snd"), credit = document.getElementById("credit"), gate = document.getElementById("gate");
+  const EXT = new Audio().canPlayType('audio/ogg; codecs="opus"') ? ".ogg" : ".mp3";
+  const ac = new AudioContext();
+  const comp = ac.createDynamicsCompressor();          // soft limiter so normalised tracks never clip
+  comp.threshold.value = -3; comp.knee.value = 6; comp.ratio.value = 12; comp.attack.value = 0.003; comp.release.value = 0.25;
+  const master = ac.createGain(); master.gain.value = 0; master.connect(comp); comp.connect(ac.destination);
+  const bufs = {{}};
+  const load = n => bufs[n] || (bufs[n] = fetch(n + EXT).then(r => {{ if (!r.ok) throw new Error(n + EXT + " " + r.status); return r.arrayBuffer(); }})
+                                                          .then(b => ac.decodeAudioData(b)));
+  // bake a seamless loop: the last xf seconds are equal-power crossfaded into the start
+  function loopBuf(buf, xf, trimEnd) {{
+    const sr = buf.sampleRate, L = Math.floor((buf.duration - (trimEnd || 0)) * sr), X = Math.min(Math.floor(xf * sr), Math.floor(L / 4));
+    const out = ac.createBuffer(buf.numberOfChannels, L - X, sr);
+    for (let c = 0; c < buf.numberOfChannels; c++) {{
+      const a = buf.getChannelData(c), o = out.getChannelData(c);
+      for (let i = 0; i < X; i++) {{ const t = i / X; o[i] = a[i] * Math.sin(t * Math.PI / 2) + a[L - X + i] * Math.cos(t * Math.PI / 2); }}
+      o.set(a.subarray(X, L - X), X);
     }}
+    return out;
   }}
-  function stop() {{
-    if (gain) gain.gain.setTargetAtTime(0, ac.currentTime, 0.2); else if (el) el.pause();
+  const ambNames = PL.amb.map(x => x.credit).join(", ");
+  function showCredit(m) {{
+    credit.textContent = "\u266a " + m.credit + (ambNames ? " \u00b7 ambience: " + ambNames + " (CC0)" : "");
+    credit.href = m.url || "#";
   }}
-  function toggle() {{
-    on = !on; hint.style.opacity = 0;
-    btn.setAttribute("aria-pressed", on); btn.innerHTML = on ? "&#9834; SOUND ON" : "&#9834; SOUND OFF";
-    (on ? start() : Promise.resolve(stop())).catch(e => {{ console.warn(e); on = false; btn.setAttribute("aria-pressed", false); btn.innerHTML = "&#9834; SOUND OFF"; }});
+  let i = 0, at = 0;
+  async function nextTrack() {{
+    const m = PL.music[i % PL.music.length]; i++;
+    const b = loopBuf(await load(m.name), 0.03, m.trimEnd), X = PL.cross, dur = b.duration * (m.repeat || 1);
+    const s = ac.createBufferSource(), g = ac.createGain();
+    s.buffer = b; s.loop = true; s.connect(g); g.connect(master);
+    const t = Math.max(at, ac.currentTime + 0.05);
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(m.gain, t + X);
+    g.gain.setValueAtTime(m.gain, t + dur); g.gain.linearRampToValueAtTime(0, t + dur + X);
+    s.start(t); s.stop(t + dur + X + 0.1);
+    setTimeout(() => showCredit(m), Math.max(0, (t - ac.currentTime) * 1000));
+    at = t + dur;                                           // the next track starts as this one fades out
+    load(PL.music[i % PL.music.length].name).catch(() => {{}});   // preload
+    setTimeout(nextTrack, Math.max(0, (at - ac.currentTime - 8) * 1000));
   }}
-  btn.addEventListener("click", e => {{ e.stopPropagation(); toggle(); }});
-  canvas.addEventListener("click", toggle);
-  addEventListener("keydown", e => {{ if (e.key === "m" || e.key === "M") toggle(); }});
-}}
+  async function ambience() {{
+    for (const a of PL.amb) load(a.name).then(buf => {{
+      const s = ac.createBufferSource(), g = ac.createGain();
+      s.buffer = loopBuf(buf, 3.0, 0); s.loop = true; s.connect(g); g.connect(master);
+      g.gain.setValueAtTime(0, ac.currentTime); g.gain.setTargetAtTime(a.gain, ac.currentTime, 1.5); s.start();
+    }}).catch(e => console.warn(e));
+  }}
+  let on = false;
+  function show() {{ btn.setAttribute("aria-pressed", on); btn.innerHTML = on ? "&#9834; SOUND ON" : "&#9834; SOUND OFF"; }}
+  function setOn(v) {{
+    on = v; show();
+    master.gain.cancelScheduledValues(ac.currentTime);
+    master.gain.setTargetAtTime(on ? PL.master : 0, ac.currentTime, on ? 0.4 : 0.15);
+  }}
+  let begun = false;
+  async function begin() {{                      // the show starts: CRT power-on + soundtrack
+    if (begun) return; begun = true;
+    gate.style.display = "none";
+    showStart = performance.now();
+    await ac.resume();
+    ambience(); nextTrack().catch(e => console.warn(e));
+    setOn(true);
+  }}
+  btn.addEventListener("click", e => {{ e.stopPropagation(); if (!begun) begin(); else setOn(!on); }});
+  addEventListener("keydown", e => {{
+    if (!begun) {{ begin(); return; }}
+    if (e.key === "m" || e.key === "M") setOn(!on);
+  }});
+  gate.addEventListener("click", begin);
+  gate.addEventListener("keydown", e => {{ if (e.key === "Enter" || e.key === " ") begin(); }});
+  if (ac.state === "running") begin();          // autoplay allowed: start right away
+  else {{ gate.style.display = "flex"; gate.focus(); }}
+}} else showStart = performance.now();          // silent build (or opened from disk): just run
 
 Promise.all([image(FONT, false), image(LOGO, true)]).then(([font, logo]) => {{
-  const t0 = performance.now();
   function frame(now) {{
     resize();
-    const t = (now - t0) / 1000;
+    if (showStart === null) {{                 // powered off until the show begins
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height);
+      gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+      requestAnimationFrame(frame); return;
+    }}
+    const t = Math.max(0, (now - showStart) / 1000);
     const lt = t % PERIOD, ult = Math.min(lt, LEN - 0.02);
     const kick = Math.exp(-((t / BEAT) % 1) * 5) * 0.8;
     // ---- the part at 320x240
@@ -259,12 +336,9 @@ Promise.all([image(FONT, false), image(LOGO, true)]).then(([font, logo]) => {{
 </html>
 """
 os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-if a.music:
-    import shutil, subprocess
-    outdir = os.path.dirname(os.path.abspath(a.out))
-    shutil.copyfile(a.music, os.path.join(outdir, music_name))
-    if music_name != "music.mp3":   # MP3 fallback for browsers without Ogg/FLAC (older Safari)
-        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", os.path.join(outdir, music_name), "-c:a", "libmp3lame",
-                        "-b:a", "192k", os.path.join(outdir, "music.mp3")], check=True)
+outdir = os.path.dirname(os.path.abspath(a.out))
+for src_file, base in tracks:   # every track as Ogg Opus (gapless decode) + MP3 (for browsers without Ogg)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", src_file, "-c:a", "libopus", "-b:a", "128k", os.path.join(outdir, base + ".ogg")], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", src_file, "-c:a", "libmp3lame", "-b:a", "192k", os.path.join(outdir, base + ".mp3")], check=True)
 open(a.out, "w").write(page)
 print(f"{a.out}: {len(page) // 1024} KB, part '{a.part}', {bars} bars + {a.hold:g} s hold")
