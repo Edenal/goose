@@ -8,3 +8,6 @@ out/
 assets/*.mp3
 assets/gen/song_cut.wav
 assets/*.otf
+
+# downloaded music candidates (licensed per track, see the audition page)
+assets/music-candidates/
