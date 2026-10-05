@@ -72,6 +72,13 @@ make zip                               # build/GOOSE-macOS.zip
 
 Every frame is a pure function of `t`, so live playback, stills and the export always match.
 
+**As a web page:** any part can be exported as one self-contained HTML file. It uses the same shaders through WebGL2,
+has no external files, loops silently, fits any window, and works on phones:
+
+```
+python3 tools/web_export.py halloween out/web/esa-halloween.html --hold 6 --title "ESA Halloween" --desc "..."
+```
+
 ## Parts
 
 Each demo part is one GLSL file in `shaders/parts/`, picked up automatically. See [`docs/PARTS.md`](docs/PARTS.md) to
@@ -94,6 +101,7 @@ write your own.
 | **JULIA DREAM** (`julia`) | 4 | Electromotive Force - Verses (1994) | A morphing Julia set in a palette-cycled gold-to-purple ramp, slowly zooming and turning. Its constant orbits a path and hops to a new region on every bar. | off |
 | **VOXEL FLIGHT** (`voxel`) | 4 | CNCD - Inside (1996) | A banking flight down a valley of chunky voxel mountains at dusk, water in the valley mirroring a gold-to-purple sky, with the ESA logo glowing in front of the sun. | off |
 | **THE INVITATION** (`invite`) | 4 | Future Crew - Assembly '92 Invitation (Fishtro, 1992) | A hand-painted night landscape with the ESA cube on a floating island; a text writer types one invitation line per bar. | off |
+| **HALLOWEEN INVITATION** (`halloween`) | 8 | Future Crew - Assembly '92 Invitation (Fishtro, 1992), Halloween edition | ESA Halloween invite: harvest moon, bats, a haunted hill and an ESA jack-o'-lantern; the weekend schedule types onto a board. | off |
 | **LIQUID METAL** (`liquid`) | 4 | RealTech - Countdown (1995) | A ray-marched chrome form melts from torus to twisted knot to blob and back on the bar lines, mirroring the brand gradient; a frame counter ticks in the corner. | off |
 | **COLOUR FEEDBACK** (`feedback`) | 4 | Orange - X14 (1995) | A video-feedback swirl without feedback: the spinning ESA cube and its orbiting sparks are redrawn sixteen times under stacked rotate, zoom and hue shifts, and the twist flips on every bar. | off |
 | **HYPERSPACE** (`hyperspace`) | 4 | Acme - 303 (1997) | A radial-blurred speed-line starburst explodes from the centre, a glossy hexagon floor and ceiling rush past, light bursts on the kick and a speedrun word slams in on every bar. | off |
