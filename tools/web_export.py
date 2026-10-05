@@ -24,6 +24,7 @@ ap.add_argument("--music", default=None, help="audio file copied next to the pag
 ap.add_argument("--credit", default="", help="music credit shown on the page (required for CC-BY tracks)")
 ap.add_argument("--credit-url", default="", help="link for the credit")
 ap.add_argument("--volume", type=float, default=0.6)
+ap.add_argument("--countdown", default=None, help="ISO time with offset, e.g. 2026-10-06T20:00:00+02:00: live countdown (parts that use uCountdown)")
 ap.add_argument("--playlist", default=None, help="JSON: music playlist (crossfaded) + ambience bed, see out/web/halloween-playlist.json")
 a = ap.parse_args()
 
@@ -148,6 +149,7 @@ const LOGO = "{logo}";
 const BEAT = 60 / 90, LEN = {bars} * 4 * BEAT, HOLD = {a.hold}, PERIOD = LEN + HOLD;
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const PL = {json.dumps(pl_js)};
+const COUNTDOWN = {json.dumps(a.countdown)} ? Date.parse({json.dumps(a.countdown)}) : null;
 
 const canvas = document.getElementById("c");
 const gl = canvas.getContext("webgl2", {{ antialias: false, alpha: false }});
@@ -317,6 +319,11 @@ Promise.all([image(FONT, false), image(LOGO, true)]).then(([font, logo]) => {{
     bind(P, "uRight", 4, dummy); bind(P, "uLogo", 5, logo); bind(P, "uWord", 6, dummy);
     if (P.u.uStrLen) gl.uniform1iv(P.u.uStrLen, lens);
     set(P, "uRes", 320, 240); set(P, "uT", t); set(P, "uLT", ult); set(P, "uLen", LEN); set(P, "uBeat", t / BEAT);
+    if (COUNTDOWN !== null) {{
+      const left = (COUNTDOWN - Date.now()) / 1000;
+      set(P, "uCountdown", Math.max(0, left));
+      if (P.u.uCountdownMode) gl.uniform1i(P.u.uCountdownMode, left > 0 ? 1 : 2);
+    }}
     set(P, "uFlash", 0); set(P, "uKickCum", t * 0.4); set(P, "uEnv", 0.5, 0.5, 0.4, kick); set(P, "uFx", 1); set(P, "uHit", -1);
     if (P.u.uSplitN) gl.uniform1i(P.u.uSplitN, 0);
     for (const m of ["uCubeRot", "uCamRot"]) if (P.u[m]) gl.uniformMatrix3fv(P.u[m], false, ID3);

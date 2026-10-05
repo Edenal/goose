@@ -13,13 +13,21 @@
 // @str 4 SAT 31 OCT  10:00-01:00
 // @str 5 SUN  1 NOV  10:00-01:00
 // @str 6 ALL TIMES CET
-// @str 7 SPEEDRUNS FOR CHARITY
-// @str 8 TWITCH.TV/ESAMARATHON
+// @str 7 SUBMISSIONS OPEN IN
+// @str 8 TUE 6 OCT 20:00 CEST
+// @str 11 SUBMISSIONS OPEN
+// @str 12 SUBMISSIONS ARE
+// @str 13 OPEN NOW!
 // @str 9 RIP
 // @str 10 PB
 
 const vec3 HW_ORANGE = vec3(1.0, 0.46, 0.06), HW_YELLOW = vec3(1.0, 0.88, 0.35), HW_RED = vec3(0.66, 0.08, 0.05);
 const vec3 HW_NIGHT = vec3(0.07, 0.04, 0.12);
+
+// Live countdown, set by the web page host (tools/web_export.py --countdown). The app/video host leaves the
+// mode at 0, so a rendered video shows the static date instead of a countdown that would be stale on playback.
+uniform float uCountdown;     // seconds left
+uniform int uCountdownMode;   // 0 = static date, 1 = counting down, 2 = open
 
 // glyph coverage with a non-uniform scale: 1 = glyph, 0.5 = outline, 0 = nothing
 float hwGlyph(int row, vec2 p, vec2 pos, vec2 scl, int n) {
@@ -134,7 +142,7 @@ vec3 part(vec2 p) {
 
     // ---- the schedule board (from bar 2)
     float boardIn = clamp((lt - 2.0 * BAR) / 0.35, 0.0, 1.0);
-    vec2 bmin = vec2(36.0, 50.0), bmax = vec2(284.0, 180.0);
+    vec2 bmin = vec2(36.0, 50.0), bmax = vec2(284.0, 185.0);
     bmin.y = mix(bmax.y, bmin.y, easeOut(boardIn));
     if (boardIn > 0.0 && p.x > bmin.x && p.x < bmax.x && p.y > bmin.y && p.y < bmax.y) {
         col = mix(col, HW_NIGHT * 0.6, 0.78);
@@ -153,9 +161,41 @@ vec3 part(vec2 p) {
         }
         if (lt > 5.0 * BAR + 1.6) col = hwLine(col, p, 6, vec2(108.0, 139.0), vec2(1.0), 99, LAV, LAV, 0);
     }
-    // ---- charity + where to watch (bars 6, 7)
-    if (lt > 6.0 * BAR) col = hwLine(col, p, 7, vec2(76.0, 155.0), vec2(1.0), hwTyped(6.0 * BAR + 0.1, lt, strLen(7), 0.06), CREAM, CREAM, 0);
-    if (lt > 7.0 * BAR) col = hwLine(col, p, 8, vec2(76.0, 167.0), vec2(1.0), hwTyped(7.0 * BAR + 0.1, lt, strLen(8), 0.06), HW_ORANGE, HW_ORANGE, 0);
+    // ---- submissions (bars 6, 7): a live countdown on the web, the static date in videos
+    if (uCountdownMode == 1) {
+        if (lt > 6.0 * BAR) col = hwLine(col, p, 7, vec2(floor((uRes.x - strW(7, 1.0)) * 0.5), 153.0), vec2(1.0),
+                                         hwTyped(6.0 * BAR + 0.1, lt, strLen(7), 0.06), CREAM, CREAM, 0);
+        if (lt > 7.0 * BAR) {
+            // "00D 00:00:00" at 2x, typed in, then ticking every second
+            int secs = int(max(uCountdown, 0.0));
+            int d = min(secs / 86400, 99), h = (secs / 3600) % 24, m = (secs / 60) % 60, sc2 = secs % 60;
+            int ch[12] = int[](48 + d / 10, 48 + d % 10, 68, 32, 48 + h / 10, 48 + h % 10, 58,
+                               48 + m / 10, 48 + m % 10, 58, 48 + sc2 / 10, 48 + sc2 % 10);
+            int shown = hwTyped(7.0 * BAR + 0.1, lt, 12, 0.05);
+            vec2 cpos = vec2(floor((uRes.x - 12.0 * 16.0) * 0.5), 164.0);
+            vec2 q = floor((p - cpos) / 2.0);
+            float on = 0.0, ol = 0.0;
+            for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {   // glyph + 1-pixel outline
+                vec2 r = q + vec2(x, y);
+                int c2 = int(floor(r.x / 8.0));
+                if (c2 < 0 || c2 >= shown || r.y < 0.0 || r.y >= 8.0) continue;
+                float b = glyphBit(ch[c2], ivec2(mod(r, 8.0)));
+                if (x == 0 && y == 0) on = b; else ol = max(ol, b);
+            }
+            if (on > 0.5) col = mix(HW_ORANGE, HW_YELLOW, step(mod(q.y, 8.0), 3.0)) * (0.9 + 0.1 * uEnv.w);
+            else if (ol > 0.5) col = HW_NIGHT * 0.4;
+        }
+    } else if (uCountdownMode == 2) {   // the countdown has run out
+        if (lt > 6.0 * BAR) col = hwLine(col, p, 12, vec2(floor((uRes.x - strW(12, 1.0)) * 0.5), 153.0), vec2(1.0), 99, CREAM, CREAM, 0);
+        float pulse = 0.85 + 0.15 * sin(uBeat * PI * 2.0);
+        if (lt > 6.0 * BAR) col = hwLine(col, p, 13, vec2(floor((uRes.x - strW(13, 2.0)) * 0.5), 164.0), vec2(2.0), 99,
+                                         HW_YELLOW * pulse, HW_YELLOW * pulse, 0);
+    } else {                             // video / app: the static date
+        if (lt > 6.0 * BAR) col = hwLine(col, p, 11, vec2(floor((uRes.x - strW(11, 1.0)) * 0.5), 155.0), vec2(1.0),
+                                         hwTyped(6.0 * BAR + 0.1, lt, strLen(11), 0.06), CREAM, CREAM, 0);
+        if (lt > 7.0 * BAR) col = hwLine(col, p, 8, vec2(floor((uRes.x - strW(8, 1.0)) * 0.5), 167.0), vec2(1.0),
+                                         hwTyped(7.0 * BAR + 0.1, lt, strLen(8), 0.06), HW_ORANGE, HW_ORANGE, 0);
+    }
 
     // ---- gravestones: RIP ... PB
     for (int g = 0; g < 2; g++) {
