@@ -94,8 +94,7 @@ else:
     pl_js = None
 sound_html = ('<button id="snd" aria-pressed="false" title="Sound (M)">&#9834; SOUND OFF</button>'
               '<a id="credit" target="_blank" rel="noopener"></a>'
-              '<div id="gate" role="button" tabindex="0"><span>&#9654; CLICK TO POWER ON</span><small>sound on &middot; {}</small></div>'
-              .format(html.escape(title))) if PL else ""
+              '<div id="gate" role="button" tabindex="0" aria-label="Click to power on (with sound)"><span>&#9654; CLICK TO POWER ON</span></div>') if PL else ""
 title = a.title or meta.get("name", a.part).title()
 desc = a.desc or meta.get("desc", "")
 
