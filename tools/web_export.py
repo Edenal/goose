@@ -59,6 +59,11 @@ def png_b64(path, size=None):
     b = io.BytesIO(); im.save(b, "PNG", optimize=True)
     return "data:image/png;base64," + base64.b64encode(b.getvalue()).decode()
 font = png_b64(R("assets/gen/font_bios8x8.png"))
+def font_b64(name, mime):
+    return f"data:{mime};base64," + base64.b64encode(open(R("assets/webfonts", name), "rb").read()).decode()
+F_RETRO = font_b64("PressStart2P-ui.woff", "font/woff")
+F_BODY = font_b64("Cabin-Regular.latin.woff2", "font/woff2")
+F_DATA = font_b64("BarlowCondensed-Regular.latin.woff2", "font/woff2")
 logo = png_b64(R("assets/gen/logo_cube.png"), 512)
 bars = int(meta.get("bars", 4))
 import subprocess
@@ -76,7 +81,9 @@ tracks = []   # (source file, published base name)
 if PL:
     for kind, target, key in (("music", -18.0, "m"), ("ambience", -33.0, "a")):
         for i, t in enumerate(PL.get(kind, [])):
-            t["name"] = f"{key}{i}"
+            import hashlib
+            h = hashlib.sha1(open(t["file"], "rb").read() + b"opus128+mp3-192").hexdigest()[:8]
+            t["name"] = f"{key}{i}-{h}"
             t["gain"] = round(min(2.5, 10 ** ((target - lufs(t["file"]) + t.get("gain_db", 0)) / 20)), 3)
             tracks.append((t["file"], t["name"]))
     pl_js = {"cross": PL.get("cross", 2.0), "master": PL.get("master", 0.85),
@@ -101,21 +108,28 @@ page = f"""<!doctype html>
 <meta property="og:title" content="{html.escape(title)}">
 <meta property="og:description" content="{html.escape(desc)}">
 <style>
-  html, body {{ margin: 0; height: 100%; background: #000; overflow: hidden; }}
+  /* fonts: Press Start 2P (SIL OFL 1.1, CodeMan38) for the game UI; ESA brand kit Cabin (body) and
+     Barlow Condensed (data), both SIL OFL 1.1. Embedded, so no system font ever shows. */
+  @font-face {{ font-family: "GOOSE Retro"; src: url({F_RETRO}) format("woff"); font-display: block; }}
+  @font-face {{ font-family: "ESA Cabin"; src: url({F_BODY}) format("woff2"); font-display: block; }}
+  @font-face {{ font-family: "ESA Barlow Condensed"; src: url({F_DATA}) format("woff2"); font-display: block; }}
+  html, body {{ margin: 0; height: 100%; background: #000; overflow: hidden; font-family: "ESA Cabin", sans-serif; }}
+  button {{ font-family: inherit; }}
   canvas {{ display: block; width: 100vw; height: 100vh; }}
-  #fallback {{ display: none; color: #fdbb1c; font: 16px/1.5 monospace; padding: 2em; white-space: pre-line; }}
-  #snd {{ position: fixed; right: 14px; bottom: 12px; font: 12px/1 monospace; letter-spacing: .08em; color: #fdbb1c;
+  #fallback {{ display: none; color: #fdbb1c; font: 18px/1.5 "ESA Cabin", sans-serif; padding: 2em; white-space: pre-line; }}
+  #snd {{ position: fixed; right: 14px; bottom: 12px; font: 12px/1 "GOOSE Retro", sans-serif; letter-spacing: 0; color: #fdbb1c; -webkit-font-smoothing: none;
          background: rgba(20,12,30,.75); border: 1px solid #fdbb1c55; border-radius: 3px; padding: 7px 10px; cursor: pointer; }}
   #snd[aria-pressed="true"] {{ color: #1b1028; background: #fdbb1c; }}
-  #hint {{ position: fixed; left: 50%; bottom: 12px; transform: translateX(-50%); font: 12px monospace; letter-spacing: .15em;
-          color: #fff6dd; opacity: .8; transition: opacity 1.5s; pointer-events: none; }}
-  #credit {{ position: fixed; left: 14px; bottom: 12px; font: 11px monospace; color: #c7adff; opacity: .55; text-decoration: none; }}
+  #credit {{ position: fixed; left: 14px; bottom: 11px; right: 160px; font: 15px/1.2 "ESA Barlow Condensed", sans-serif; letter-spacing: .02em;
+             color: #c7adff; opacity: .6; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
   #credit:hover {{ opacity: 1; }}
   #gate {{ position: fixed; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
-          background: #000; cursor: pointer; color: #fdbb1c; font: 20px monospace; letter-spacing: .2em; text-align: center; }}
+          background: #000; cursor: pointer; color: #fdbb1c; font: 20px/1.4 "GOOSE Retro", sans-serif; letter-spacing: 0; text-align: center;
+          -webkit-font-smoothing: none; padding: 0 16px; }}
   #gate:focus {{ outline: none; }}
   #gate span {{ animation: blink 1.1s steps(2, start) infinite; }}
-  #gate small {{ font-size: 12px; letter-spacing: .12em; color: #c7adff; opacity: .7; }}
+  #gate small {{ font: 16px/1.3 "ESA Cabin", sans-serif; letter-spacing: .04em; color: #c7adff; opacity: .75; }}
+  @media (max-width: 520px) {{ #gate {{ font-size: 16px; }} #gate small {{ font-size: 14px; }} #credit {{ font-size: 13px; right: 120px; }} #snd {{ font-size: 8px; }} }}
   @keyframes blink {{ to {{ visibility: hidden; }} }}
 </style>
 </head>
@@ -205,14 +219,16 @@ let showStart = null;                       // set when the show (CRT power-on +
 const SOUND = PL && location.protocol.startsWith("http") && window.AudioContext;
 if (SOUND) {{
   const btn = document.getElementById("snd"), credit = document.getElementById("credit"), gate = document.getElementById("gate");
-  const EXT = new Audio().canPlayType('audio/ogg; codecs="opus"') ? ".ogg" : ".mp3";
+  // Opus first where the browser says it can, MP3 always as the fallback (each track falls back on its own)
+  const EXTS = new Audio().canPlayType('audio/ogg; codecs="opus"') ? [".ogg", ".mp3"] : [".mp3"];
   const ac = new AudioContext();
   const comp = ac.createDynamicsCompressor();          // soft limiter so normalised tracks never clip
   comp.threshold.value = -3; comp.knee.value = 6; comp.ratio.value = 12; comp.attack.value = 0.003; comp.release.value = 0.25;
   const master = ac.createGain(); master.gain.value = 0; master.connect(comp); comp.connect(ac.destination);
   const bufs = {{}};
-  const load = n => bufs[n] || (bufs[n] = fetch(n + EXT).then(r => {{ if (!r.ok) throw new Error(n + EXT + " " + r.status); return r.arrayBuffer(); }})
-                                                          .then(b => ac.decodeAudioData(b)));
+  const fetchDecode = url => fetch(url).then(r => {{ if (!r.ok) throw new Error(url + " HTTP " + r.status); return r.arrayBuffer(); }})
+    .then(b => new Promise((ok, no) => ac.decodeAudioData(b, ok, e => no(e || new Error("cannot decode " + url)))));
+  const load = n => bufs[n] || (bufs[n] = EXTS.reduce((p, ext) => p.catch(() => fetchDecode(n + ext)), Promise.reject()));
   // bake a seamless loop: the last xf seconds are equal-power crossfaded into the start
   function loopBuf(buf, xf, trimEnd) {{
     const sr = buf.sampleRate, L = Math.floor((buf.duration - (trimEnd || 0)) * sr), X = Math.min(Math.floor(xf * sr), Math.floor(L / 4));
@@ -255,6 +271,7 @@ if (SOUND) {{
   function show() {{ btn.setAttribute("aria-pressed", on); btn.innerHTML = on ? "&#9834; SOUND ON" : "&#9834; SOUND OFF"; }}
   function setOn(v) {{
     on = v; show();
+    if (on && ac.state !== "running") ac.resume();
     master.gain.cancelScheduledValues(ac.currentTime);
     master.gain.setTargetAtTime(on ? PL.master : 0, ac.currentTime, on ? 0.4 : 0.15);
   }}
@@ -263,9 +280,12 @@ if (SOUND) {{
     if (begun) return; begun = true;
     gate.style.display = "none";
     showStart = performance.now();
-    await ac.resume();
-    ambience(); nextTrack().catch(e => console.warn(e));
+    try {{ if (navigator.audioSession) navigator.audioSession.type = "playback"; }} catch (e) {{}}   // iOS: ignore the silent switch
+    const resumed = ac.resume();
     setOn(true);
+    await resumed;
+    ambience();
+    nextTrack().catch(e => {{ console.error("GOOSE sound:", e); btn.innerHTML = "&#9834; NO SOUND"; btn.title = String(e && e.message || e); }});
   }}
   btn.addEventListener("click", e => {{ e.stopPropagation(); if (!begun) begin(); else setOn(!on); }});
   addEventListener("keydown", e => {{
@@ -273,6 +293,8 @@ if (SOUND) {{
     if (e.key === "m" || e.key === "M") setOn(!on);
   }});
   gate.addEventListener("click", begin);
+  // browsers may suspend audio later (tab switch, phone call): any click wakes it up again
+  addEventListener("pointerdown", () => {{ if (begun && on && ac.state !== "running") ac.resume(); }}, true);
   gate.addEventListener("keydown", e => {{ if (e.key === "Enter" || e.key === " ") begin(); }});
   if (ac.state === "running") begin();          // autoplay allowed: start right away
   else {{ gate.style.display = "flex"; gate.focus(); }}
