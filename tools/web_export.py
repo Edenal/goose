@@ -25,6 +25,7 @@ ap.add_argument("--credit", default="", help="music credit shown on the page (re
 ap.add_argument("--credit-url", default="", help="link for the credit")
 ap.add_argument("--volume", type=float, default=0.6)
 ap.add_argument("--countdown", default=None, help="ISO time with offset, e.g. 2026-10-06T20:00:00+02:00: live countdown (parts that use uCountdown)")
+ap.add_argument("--redirect-at-zero", default=None, help="URL to send visitors to when the countdown reaches zero")
 ap.add_argument("--playlist", default=None, help="JSON: music playlist (crossfaded) + ambience bed, see out/web/halloween-playlist.json")
 a = ap.parse_args()
 
@@ -149,6 +150,18 @@ const BEAT = 60 / 90, LEN = {bars} * 4 * BEAT, HOLD = {a.hold}, PERIOD = LEN + H
 const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const PL = {json.dumps(pl_js)};
 const COUNTDOWN = {json.dumps(a.countdown)} ? Date.parse({json.dumps(a.countdown)}) : null;
+const REDIRECT = {json.dumps(a.redirect_at_zero)};
+// the visitor's clock may be wrong: correct it with the server's Date header
+let clockSkew = 0;
+if (COUNTDOWN !== null) {{
+  const due = () => Date.now() + clockSkew >= COUNTDOWN;
+  const go = () => {{ if (REDIRECT) location.replace(REDIRECT); }};
+  if (due()) go();
+  fetch(location.href, {{ method: "HEAD", cache: "no-store" }}).then(r => {{
+    const d = Date.parse(r.headers.get("date")); if (d) clockSkew = d - Date.now(); if (due()) go();
+  }}).catch(() => {{}});
+  if (REDIRECT) setInterval(() => {{ if (due()) go(); }}, 500);
+}}
 
 const canvas = document.getElementById("c");
 const gl = canvas.getContext("webgl2", {{ antialias: false, alpha: false }});
@@ -319,7 +332,7 @@ Promise.all([image(FONT, false), image(LOGO, true)]).then(([font, logo]) => {{
     if (P.u.uStrLen) gl.uniform1iv(P.u.uStrLen, lens);
     set(P, "uRes", 320, 240); set(P, "uT", t); set(P, "uLT", ult); set(P, "uLen", LEN); set(P, "uBeat", t / BEAT);
     if (COUNTDOWN !== null) {{
-      const left = (COUNTDOWN - Date.now()) / 1000;
+      const left = (COUNTDOWN - Date.now() - clockSkew) / 1000;
       set(P, "uCountdown", Math.max(0, left));
       if (P.u.uCountdownMode) gl.uniform1i(P.u.uCountdownMode, left > 0 ? 1 : 2);
     }}
